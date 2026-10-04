@@ -30,7 +30,7 @@ It is built to sit next to the built-in Tile and Area cards without looking out 
 
 ### HACS (custom repository)
 
-1. HACS → ⋮ → **Custom repositories** → add `https://github.com/<your-github-user>/area-pulse-card`, type **Dashboard**.
+1. HACS → ⋮ → **Custom repositories** → add `https://github.com/zacharatos/area-pulse-card`, type **Dashboard**.
 2. Search for **Area Pulse Card** → **Download**.
 3. Reload the browser (clear cache if the card doesn't show up in the picker).
 
