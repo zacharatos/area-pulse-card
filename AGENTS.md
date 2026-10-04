@@ -32,24 +32,132 @@ If you commit by mistake, say so straight away. Don't try to undo it yourself; t
 End with a short hand-off instead of a commit:
 
 1. The files you changed, added or deleted, with one line each on what changed and why.
-2. What you ran to check it (`npm test`, …) and the result.
-3. Anything he should try in Foundry by hand.
+2. What you ran to check it (`npm run typecheck`, `npm test`, `npm run build`, the harness) and the result.
+3. Anything he should try in a real Home Assistant by hand (see "Things only a real Home Assistant can prove" below).
+4. Any new or changed user-facing strings, for him to review (English and Greek).
 
 Don't write a commit message unless he asks for one. If he does, offer it as a suggestion in your reply; never use it yourself.
 
 ## The project in one minute
 
-- **What it is:** Planar Theater, a Foundry VTT v14 GM tool for theater-of-the-mind scenes: a black scene with preloaded place backdrops switched live, title cards, linked ambient sound, and NPC portrait cards with veiled names.
-- **Code map, tests, manual checklist:** `docs/DEVELOPMENT.md`.
-- **Releases:** `docs/PUBLISHING.md`. Releases happen when the maintainer pushes a tag; you never tag.
-- **Checks:** `npm test` (syntax check plus node:test: helpers, manifest, language parity). Run it before you hand off.
+- **What it is:** Area Pulse Card (`custom:area-pulse-card`), a HACS "Dashboard" (Lovelace) card for Home Assistant. Pick an area and the card shows what matters about that room at a glance: presence and how long it has been occupied, temperature and humidity, open doors and windows, safety alerts, lights and other devices that are on, media, low batteries, plus a row of quick actions. It has to sit next to the built-in Tile and Area cards without looking foreign.
+- **Who uses it:** people with real homes, where one area can hold hundreds of entities. The card must stay useful and fast there, which is why it has zero-config discovery *and* a label filter (`label_filter`).
+- **Stack:** TypeScript + Lit 3, bundled by rollup + terser into one ES module, `dist/area-pulse-card.js` (Lit is inside the bundle). No other runtime dependency; the Home Assistant types are declared locally in `src/types.ts` on purpose (no `custom-card-helpers`).
+- **Repo:** `zacharatos/area-pulse-card`. Distributed through HACS as a custom repository (`hacs.json`, filename `area-pulse-card.js`, minimum Home Assistant 2025.7.0).
+- **Maintainer:** Timos. He tests in his own Home Assistant and reviews every diff. English is the working language of the repo; the card itself is localised in English and Greek.
+
+## Code map
+
+| File | What lives there |
+| --- | --- |
+| `src/area-pulse-card.ts` | The card element: `setConfig`, `getStubConfig`, `getConfigElement`, `getGridOptions`, `willUpdate` (caches the area index), `render`, the chips, the header, the quick actions, the group popup, the main-light icon and glow. Registers the card in `window.customCards`. Holds `VERSION` (console banner). |
+| `src/discovery.ts` | Pure logic that turns `hass` into card data. `indexArea` (which entities belong to the area, including device to area inheritance, plus the label filter), `buildGroups`/`DEFAULT_GROUPS`/`DEFAULT_TOP_GROUPS`, `reading` (median/sum aggregation), `comfortState`, `watchedEntities` (which state changes cause a re-render), `findMainLight`, `lightColor`. |
+| `src/labels.ts` | Pure label-filter logic (`resolveLabelFilter`, `passesLabelFilter`) and the cached `config/label_registry/list` call. |
+| `src/presets.ts` | Quick-action presets (`lights_toggle`, `vacuum_area`, ...) resolved to a name, icon, state and Home Assistant action. |
+| `src/action-handler.ts` | Tap / hold / double-tap handling that hands off to Home Assistant's own `hass-action` event. |
+| `src/editor.ts` | The visual editor, built on `ha-form` selectors. Schema functions, plus `_formData` / `_mainChanged` which map form values to and from the YAML config. |
+| `src/types.ts` | Config types (`AreaPulseCardConfig`, `QuickActionConfig`, `PresetId`), the slice of the Home Assistant frontend API the card uses. |
+| `src/localize.ts` | All user-facing strings, `en` and `el`, and `localize(hass, key, vars)`. |
+| `src/styles.ts`, `src/popup-styles.ts` | Card and popup CSS. Colours go through CSS variables (`--apc-*`) that fall back to Home Assistant theme variables. |
+| `test/*.test.mjs` | `node:test` unit tests for the pure logic (`discovery`, `labels`, `presets`). `test/register.mjs` + `resolve-ts.mjs` let Node run the `.ts` sources directly. |
+| `test/harness.html`, `test/icons.js` | A browser harness that renders the card against a mock `hass` with stubbed `ha-card`/`ha-icon`. Used for screenshots and visual checks. |
+| `dist/area-pulse-card.js` | The built bundle. **Committed on purpose**: HACS serves it and CI fails if it is out of date. |
+
+Rule of thumb: logic that does not need the DOM goes in `discovery.ts`, `labels.ts` or `presets.ts` and gets a test. `area-pulse-card.ts` renders what those modules decide.
+
+## Checks
+
+Run these before you hand off, and report the results:
+
+```bash
+npm install            # first time only; node_modules is not committed
+npm run typecheck      # tsc --noEmit
+npm test               # node:test unit tests
+npm run build          # rewrites dist/area-pulse-card.js
+```
+
+- Always rebuild `dist/` after changing anything in `src/`. Leave it modified in the working tree (never `git add` it): CI runs `git diff --exit-code dist/` after building and fails if the committed bundle is stale.
+- For anything visual, look at it. Serve the repo (`python3 -m http.server 8765`) and open `http://localhost:8765/test/harness.html` (query options: `?dark=1`, `?lang=el`, `?helpers=1` for the native-tile popup path, `?rgb=255,120,40` for the main light colour). Add a scenario to the harness when you add a visible feature. Check light and dark, and the browser console.
+- The harness stubs Home Assistant's elements, so it proves layout and logic, not integration. See the last section.
+
+## How we work on this card
+
+- **Stay native.** Use Home Assistant's own pieces rather than rebuilding them: `ha-card`, `ha-icon`/`ha-state-icon`, the more-info dialog (`hass-more-info`), `hass-action` for every action (so `confirmation`, `navigate`, `perform-action` behave like core cards), `ha-form` selectors in the editor, native tile cards in the popup (via `loadCardHelpers`, with a fallback). Colours come from theme variables and HA colour tokens, never hard-coded when a token exists.
+- **Zero config first.** A card with only `area:` set must already look useful. Options refine; they never become required.
+- **Opt-in beats opt-out.** New behaviour that changes what a user already sees is off by default, or is a no-op unless configured. Don't change the look of existing configs silently.
+- **Fast in big homes.** Anything that loops over `hass.entities` or `hass.states` is computed in `willUpdate` and cached against its inputs; `shouldUpdate` only re-renders for `watchedEntities`. Don't add per-render scans.
+- **Explicit config wins over discovery.** An entity named in the config (`main_light`, `temperature_entity`, `presence_entities`, an action's `entity`) is used even if discovery or the label filter would skip it.
+- **Small, reviewable diffs.** One feature per change. No drive-by reformatting, no renames of config keys. Config keys are a public API: never rename or remove one without the maintainer's say-so, and if it is ever approved, keep reading the old key.
+- **Keep dependencies at: lit.** Ask before adding any package, and especially before anything that grows the bundle noticeably.
+
+## Adding a feature
+
+Work through this list; most features touch most of it.
+
+1. **Config** (`src/types.ts`): add the option to `AreaPulseCardConfig` (or `QuickActionConfig`), optional, with a doc comment. Validate anything risky in `setConfig` with a clear error message.
+2. **Logic** (`src/discovery.ts`, `src/labels.ts` or `src/presets.ts`): keep it pure, pass `hass` and config in, return plain data. Add a `node:test` case in `test/` (and extend the fixtures there if needed).
+3. **Render** (`src/area-pulse-card.ts`): render the result. If it depends on new entities, make sure they are in `watchedEntities`, otherwise the card will not update when they change.
+4. **Styles** (`src/styles.ts` / `src/popup-styles.ts`): use the `--apc-*` variables. Check narrow containers and the `compact` layout.
+5. **Editor** (`src/editor.ts`): add the field to the schema, then the mapping in `_formData` and `_mainChanged` (config to form and back). Only write a key to YAML when it differs from the default; remove it when cleared. Round-trip check: a value typed in YAML must survive an unrelated edit in the editor unchanged.
+6. **Strings** (`src/localize.ts`): every new key in **both** `en` and `el`, same placeholders. The maintainer reviews the interface text, so list new strings in your hand-off.
+7. **Docs** (`README.md`): add the option to the options table, mention it under Features if users should notice it, and keep the full YAML example valid. If it needs explaining (like the label filter), give it its own short section.
+8. **Harness and tests**: add a scenario to `test/harness.html` if it is visible; run the checks above; rebuild `dist/`.
+
+## Refactoring
+
+- Behaviour must not change unless asked. Prove it: the unit tests still pass, the harness looks the same in light, dark and `?lang=el`, and the editor still produces the same YAML for the same inputs.
+- Split a file only when it earns it, and keep the "pure logic in its own module with a test" split described above.
+- `useDefineForClassFields` is `false` and decorators are `experimentalDecorators` because of Lit. Don't change `tsconfig.json` casually.
+- The `.ts` files are imported without extensions (bundler resolution); the test hook in `test/resolve-ts.mjs` copes with that. Don't add `.ts` extensions to imports in `src/`.
+
+## Removing a feature
+
+Removal is a breaking change for someone's dashboard, so:
+
+1. Ask the maintainer first.
+2. Prefer deprecating: keep accepting the key in `setConfig`, stop documenting it, and say so in the hand-off.
+3. When it really goes: remove it from `types.ts`, logic, render, styles, the editor schema and its mapping, `localize.ts` (both languages), the README (table, example, text), harness scenarios and tests, then rebuild `dist/`. Search for the key across the repo (`grep -rn <key>`) so nothing is left behind.
+
+## The label filter (read before touching discovery)
+
+`label_filter` is what makes the card usable in an area with hundreds of entities. Its rules are deliberate:
+
+- Home Assistant labels sit on entities and on devices; with `from_device` (default `true`) both count.
+- `include` is any-of by default and all-of with `match: all`. `exclude` always wins. Tokens may be label IDs or names (case-insensitive); names are resolved through the label registry, which is fetched once (`config/label_registry/list`) and cached. IDs work without it.
+- It is applied once, in `indexArea`, so every group, reading, the main light and the popup see the same filtered set. Do not add a second, separate filtering path.
+- Area presets target the area normally but only the *filtered entities* when a filter is active, so a button never affects something the card hides. Keep that property for any new preset or bulk action.
+- If the filter leaves an area with nothing, the card shows a hint instead of an empty box.
+
+## Where it can evolve
+
+Ideas the maintainer and users have discussed or that fit the card's direction. These are options, not a to-do list: ask before starting one, and build it behind a config option.
+
+- **Per-group label filters**, e.g. one label for the lights chip and another for the climate readings.
+- **Room popup / detail sheet** opened from the header (history graph, cameras, scenes) instead of only a navigation action.
+- **Sparklines** for temperature/humidity trends, and an **air-quality score** combining CO₂, PM2.5 and VOC.
+- **Energy chip** (power now, energy today) using the area's power and energy sensors.
+- **Occupancy nudges**: "lights on, room empty for 20 min", with a one-tap fix.
+- **Floor mode** or a multi-area strip built from the same index logic.
+- More **presets** (scenes, climate set-points, media transport) and more **locales**.
+
+Keep the principles above when extending: zero config first, native look, explicit config wins, fast in big homes.
+
+## Things only a real Home Assistant can prove
+
+The harness cannot check these, so say in your hand-off which ones the change touches and ask the maintainer to try them:
+
+- The visual editor in the real dashboard editor (`ha-form` selectors, the label picker, YAML round-trips).
+- Real registry data: `hass.entities`, `hass.devices` and their `labels`, device to area inheritance, the `config/label_registry/list` call.
+- The popup with native tiles (brightness slider), and opening an entity's more-info dialog from the popup and closing it again.
+- Actions with confirmation, `vacuum_area` (needs Home Assistant 2026.3+ and mapped segments), `navigate`.
+- Sections view sizing (`getGridOptions`), narrow columns, a phone in portrait.
+- Light and dark themes, and a custom theme.
 
 ## Conventions
 
-- Foundry loads `scripts/main.mjs` directly; there is no build step.
-- Pure logic goes in `scripts/util.mjs` with a test; anything that needs Foundry globals goes elsewhere.
-- User-facing text goes in `lang/en.json` **and** `lang/el.json` with the same keys and placeholders; the tests check it. The maintainer writes or reviews interface strings himself (Foundry's AI Content Policy requires human-authored UI text for listed packages), so list any new strings in your hand-off.
-- Tile data lives in `flags.planar-theater`; if you change its shape, bump the schema version and add a migration.
-- Read "Changing things" in `docs/DEVELOPMENT.md` (tile anchors, hidden tiles, z-order) before touching tiles, the canvas, audio or preloading.
-- Version numbers in `module.json`, `package.json` and `CHANGELOG.md`: only change them when asked.
-- Never add campaign content, publisher text, art or audio to the repo.
+- **Releases:** the maintainer bumps the version, commits, and pushes a `vX.Y.Z` tag; the release workflow builds `dist/area-pulse-card.js` and attaches it. You never tag or push.
+- **Version numbers** in `package.json` (and `VERSION` in `src/area-pulse-card.ts`): only change them when asked, and keep them equal.
+- **CI** (`.github/workflows/validate.yml`): the HACS validation, then typecheck, build and "bundle is up to date". Anything that would fail there fails the maintainer's push, so run the same checks locally.
+- **No secrets, no private data**: never put real entity IDs, tokens, addresses or photos from a real home in the repo, the harness or the screenshots. Use invented names.
+- **Screenshots** in `docs/` come from the harness. Refresh them only when the look changes and the maintainer wants it.
+- **Language:** comments and docs are plain, direct English. Interface text is Greek and English only, kept in `src/localize.ts`.

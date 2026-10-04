@@ -7,7 +7,8 @@
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./test/register.mjs --test \"test/**/*.test.mjs\""
   },
   "keywords": ["home-assistant", "hacs", "lovelace", "custom-card", "area"],
   "license": "MIT",

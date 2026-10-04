@@ -24,6 +24,7 @@ export interface EntityRegistryDisplayEntry {
   area_id?: string | null;
   hidden?: boolean;
   entity_category?: "config" | "diagnostic" | null;
+  /** Label IDs. */
   labels?: string[];
 }
 
@@ -32,6 +33,15 @@ export interface DeviceRegistryEntry {
   area_id?: string | null;
   name?: string | null;
   name_by_user?: string | null;
+  /** Label IDs. */
+  labels?: string[];
+}
+
+export interface LabelRegistryEntry {
+  label_id: string;
+  name: string;
+  icon?: string | null;
+  color?: string | null;
 }
 
 export interface AreaRegistryEntry {
@@ -52,6 +62,7 @@ export interface HomeAssistant {
   language: string;
   locale?: { language: string };
   themes?: { darkMode?: boolean };
+  callWS: <T>(msg: Record<string, unknown>) => Promise<T>;
   callService: (
     domain: string,
     service: string,
@@ -150,6 +161,13 @@ export interface AreaPulseCardConfig {
     temperature_high?: string;
     humidity_low?: string;
     humidity_high?: string;
+  };
+  /** Only show entities that carry (or lack) certain Home Assistant labels. See labels.ts. */
+  label_filter?: {
+    include?: string | string[];
+    exclude?: string | string[];
+    match?: "any" | "all";
+    from_device?: boolean;
   };
   presence_entities?: string[];
   exclude_entities?: string[];

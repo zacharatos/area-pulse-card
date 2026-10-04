@@ -13,6 +13,7 @@ It is built to sit next to the built-in Tile and Area cards without looking out 
 ## Features
 
 - **Zero config** — select an area; entities are discovered from the entity and device registries (device → area inheritance included, hidden and config entities skipped).
+- **Label filter** — an area with hundreds of entities? Tag the few that matter with a Home Assistant label and tell the card to show only those (or to hide everything carrying another label). See [Filtering by labels](#filtering-by-labels).
 - **Presence first** — occupancy/presence sensors (mmWave etc.) drive an "Occupied for 12 min / Clear for 2 h" line and a live presence dot; falls back to motion sensors when the room has no presence sensor.
 - **Main light on the area icon** — tap the icon to toggle the room's main light, hold for its dialog. The icon and the ambient glow take the light's actual colour (RGB, colour temperature or hue/saturation) and the glow scales with brightness. Auto-detected (the only light, or one named ceiling/main/κεντρικό…), or set `main_light`.
 - **Climate at a glance** — uses the area's own temperature/humidity sensor setting when present, otherwise the median of all sensors (same rule as the core area card). Outside the comfort band, temperature turns blue (cold) or red (warm) and humidity white (dry) or blue (humid). On light themes "dry" uses a pale blue-grey, because white text is invisible on a white card. All four colours are configurable.
@@ -74,6 +75,9 @@ sensor_classes: [carbon_dioxide, illuminance]
 groups: [alerts, motion, doors, windows, climate, lights, switches, media, batteries]
 top_groups: [motion, doors, windows]
 exclude_entities: [binary_sensor.living_room_tv_motion]
+label_filter:
+  include: [Living room card]   # label name or ID
+  exclude: [Hidden]
 battery_threshold: 20
 tap_action:
   action: navigate
@@ -109,9 +113,41 @@ actions:
 | `alert_classes` | list | `moisture, smoke, gas, carbon_monoxide, safety, problem, tamper` | Binary-sensor device classes treated as alerts. |
 | `presence_entities` | list | auto | Force which entities define presence (e.g. a template or `input_boolean`). |
 | `exclude_entities` | list | `[]` | Ignore these entities everywhere. |
+| `label_filter` | map | none | Only show entities (or devices) carrying certain Home Assistant labels. See [Filtering by labels](#filtering-by-labels). |
 | `battery_threshold` | number | `20` | Battery % considered low. |
 | `tap_action` / `hold_action` / `double_tap_action` | action | none | Standard HA actions for the header. |
 | `actions` | list | `[]` | Quick actions, see below. |
+
+### Filtering by labels
+
+Real areas collect dozens or hundreds of entities: every diagnostic sensor, every bulb in a group, every integration helper. Labels let you choose which ones the card cares about, without listing entities one by one.
+
+1. In Home Assistant open **Settings → Areas, labels & zones → Labels** and create a label (say *Living room card*).
+2. Attach it to entities or devices (select several in **Settings → Devices & services → Entities**, then **Add label**). Labelling a *device* covers all of its entities.
+3. Tell the card to use it, in the editor under **Filter by labels** or in YAML:
+
+```yaml
+type: custom:area-pulse-card
+area: living_room
+label_filter:
+  include: [Living room card]
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `include` | none | Show only entities that carry one of these labels. A single label or a list; label **name** (`Living room card`) or label **ID** (`living_room_card`) both work. The visual editor writes IDs. |
+| `exclude` | none | Hide entities that carry any of these labels. **Exclusion always wins** over `include`. Works on its own too: "everything except what is labelled *Hidden*". |
+| `match` | `any` | With several `include` labels, `any` needs one of them, `all` needs every one. |
+| `from_device` | `true` | Also read labels from the entity's device, so one label on a device brings in all its entities. Set `false` to look at entity labels only. |
+
+Good to know:
+
+- The filter applies to **everything the card derives from the area**: chips, climate readings, presence, the main light, the group popup and battery warnings. Battery sensors are separate entities, so label the *device* (with `from_device` on) and its battery warning comes along.
+- The area presets (`lights_on`/`lights_off`/`lights_toggle`, `covers_*`, `fans_off`, `media_stop`, `everything_off`) act on the whole area normally, but with a label filter they act **only on the entities the card shows**, so "Lights off" never switches off lights you kept off the card.
+- Entities you name explicitly (`main_light`, `temperature_entity`, `humidity_entity`, `presence_entities`, an `actions` entity) and the sensors set in the area itself are always used, label or not.
+- `exclude_entities` still applies on top of the label filter.
+- If no entity in the area matches, the card says so and names the labels it was looking for, rather than rendering an empty card.
+- Label names are matched case-insensitively. If you rename a label in Home Assistant, the ID stays, so IDs are the safer choice in shared YAML.
 
 ### Quick actions
 
@@ -144,6 +180,8 @@ Without a preset, an `entity` button toggles the entity (scenes and scripts run,
 npm install
 npm run build        # dist/area-pulse-card.js
 npm run watch        # rebuild on change
+npm run typecheck    # tsc --noEmit
+npm test             # node:test: label filter, area discovery
 python3 -m http.server 8765   # then open http://localhost:8765/test/harness.html (?dark=1, ?lang=el)
 ```
 

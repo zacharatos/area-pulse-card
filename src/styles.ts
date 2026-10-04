@@ -376,6 +376,20 @@ export const cardStyles = css`
   :host([layout="compact"]) .actions.dense .action { height: 36px; }
   :host([layout="compact"]) .action .label { display: none; }
 
+  .hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--apc-control-radius);
+    background: var(--apc-neutral-bg);
+    color: var(--secondary-text-color);
+    font-size: 12px;
+    line-height: 16px;
+    --mdc-icon-size: 18px;
+  }
+  .hint ha-icon { flex: none; }
+
   .warning {
     padding: 16px;
     color: var(--warning-color, #ffa600);

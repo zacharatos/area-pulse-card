@@ -1,4 +1,5 @@
 import type { AreaPulseCardConfig, GroupId, HassEntity, HomeAssistant } from "./types";
+import { NO_LABEL_FILTER, passesLabelFilter, type ResolvedLabelFilter } from "./labels";
 
 export const DEFAULT_ALERT_CLASSES = [
   "moisture",
@@ -45,28 +46,39 @@ const SUM_CLASSES = new Set(["power", "energy", "gas", "water", "current"]);
 const UNAVAILABLE = new Set(["unavailable", "unknown"]);
 
 export interface AreaIndex {
-  /** Visible, primary entities (no hidden, no config/diagnostic). */
+  /** Visible, primary entities (no hidden, no config/diagnostic) that pass the label filter. */
   primary: string[];
   /** Diagnostic entities too (used for batteries only). */
   withDiagnostic: string[];
+  /** Primary entities in the area before the label filter, to tell "empty area" from "nothing matched". */
+  unfilteredCount: number;
 }
 
 /** Resolve the entity ids that belong to an area, honouring device-area inheritance like HA does. */
-export function indexArea(hass: HomeAssistant, areaId: string, exclude: string[] = []): AreaIndex {
+export function indexArea(
+  hass: HomeAssistant,
+  areaId: string,
+  exclude: string[] = [],
+  labelFilter: ResolvedLabelFilter = NO_LABEL_FILTER
+): AreaIndex {
   const primary: string[] = [];
   const withDiagnostic: string[] = [];
+  let unfilteredCount = 0;
   const excluded = new Set(exclude);
   for (const entry of Object.values(hass.entities || {})) {
     if (entry.hidden || excluded.has(entry.entity_id)) continue;
     if (!hass.states[entry.entity_id]) continue;
-    const entityArea =
-      entry.area_id ?? (entry.device_id ? hass.devices?.[entry.device_id]?.area_id : undefined);
+    const device = entry.device_id ? hass.devices?.[entry.device_id] : undefined;
+    const entityArea = entry.area_id ?? device?.area_id;
     if (entityArea !== areaId) continue;
     if (entry.entity_category === "config") continue;
+    const isPrimary = entry.entity_category !== "diagnostic";
+    if (isPrimary) unfilteredCount++;
+    if (!passesLabelFilter(entry.labels, device?.labels, labelFilter)) continue;
     withDiagnostic.push(entry.entity_id);
-    if (entry.entity_category !== "diagnostic") primary.push(entry.entity_id);
+    if (isPrimary) primary.push(entry.entity_id);
   }
-  return { primary, withDiagnostic };
+  return { primary, withDiagnostic, unfilteredCount };
 }
 
 const domainOf = (id: string) => id.split(".")[0];

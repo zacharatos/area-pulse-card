@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { AreaPulseCardConfig, HomeAssistant, QuickActionConfig } from "./types";
 import { DEFAULT_ALERT_CLASSES, DEFAULT_GROUPS, DEFAULT_TOP_GROUPS, SENSOR_CLASS_OPTIONS } from "./discovery";
 import { PRESETS } from "./presets";
+import { toList } from "./labels";
 import { localize } from "./localize";
 
 type Schema = Record<string, unknown>;
@@ -196,6 +197,30 @@ export class AreaPulseCardEditor extends LitElement {
       {
         type: "expandable",
         name: "",
+        title: t("ed_section_labels"),
+        icon: "mdi:label-multiple-outline",
+        flatten: true,
+        schema: [
+          { name: "label_include", selector: { label: { multiple: true } } },
+          { name: "label_exclude", selector: { label: { multiple: true } } },
+          {
+            name: "label_match",
+            selector: {
+              select: {
+                mode: "dropdown",
+                options: [
+                  { value: "any", label: t("ed_label_match_any") },
+                  { value: "all", label: t("ed_label_match_all") },
+                ],
+              },
+            },
+          },
+          { name: "label_from_device", selector: { boolean: {} } },
+        ],
+      },
+      {
+        type: "expandable",
+        name: "",
         title: t("ed_section_interactions"),
         icon: "mdi:gesture-tap",
         flatten: true,
@@ -259,6 +284,10 @@ export class AreaPulseCardEditor extends LitElement {
       comfort_hum_max: "ed_comfort_hum_max",
       groups: "ed_groups",
       top_groups: "ed_top_groups",
+      label_include: "ed_label_include",
+      label_exclude: "ed_label_exclude",
+      label_match: "ed_label_match",
+      label_from_device: "ed_label_from_device",
       main_light: "ed_main_light",
       link_main_light: "ed_link_main_light",
       color_temp_low: "ed_color_temp_low",
@@ -294,6 +323,10 @@ export class AreaPulseCardEditor extends LitElement {
       link_main_light: true,
       top_groups: DEFAULT_TOP_GROUPS,
       ...c,
+      label_include: toList(c.label_filter?.include),
+      label_exclude: toList(c.label_filter?.exclude),
+      label_match: c.label_filter?.match ?? "any",
+      label_from_device: c.label_filter?.from_device ?? true,
       color_temp_low: c.colors?.temperature_low,
       color_temp_high: c.colors?.temperature_high,
       color_hum_low: c.colors?.humidity_low,
@@ -323,6 +356,14 @@ export class AreaPulseCardEditor extends LitElement {
       humidity_high: v.color_hum_high,
     } as Record<string, unknown>);
     for (const k of ["color_temp_low", "color_temp_high", "color_hum_low", "color_hum_high"]) delete v[k];
+    const labelFilter = clean({
+      include: v.label_include,
+      exclude: v.label_exclude,
+      match: v.label_match === "all" ? "all" : undefined,
+      from_device: v.label_from_device === false ? false : undefined,
+    } as Record<string, unknown>);
+    for (const k of ["label_include", "label_exclude", "label_match", "label_from_device"]) delete v[k];
+    v.label_filter = Object.keys(labelFilter).length ? labelFilter : undefined;
     v.colors = Object.keys(colors).length ? colors : undefined;
     if (JSON.stringify(v.top_groups) === JSON.stringify(DEFAULT_TOP_GROUPS)) delete v.top_groups;
     const next = clean({

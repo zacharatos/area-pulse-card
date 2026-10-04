@@ -10,6 +10,7 @@ import type {
   GroupId,
   HassEntity,
   HomeAssistant,
+  LabelRegistryEntry,
 } from "./types";
 import {
   buildGroups,
@@ -25,6 +26,7 @@ import {
   type Group,
   type Reading,
 } from "./discovery";
+import { hasLabelFilter, loadLabelRegistry, resolveLabelFilter, type ResolvedLabelFilter } from "./labels";
 import { cssColor, resolveAction, type ResolvedAction } from "./presets";
 import { actionHandler, type ActionKind } from "./action-handler";
 import { localize } from "./localize";
@@ -103,6 +105,11 @@ export class AreaPulseCard extends LitElement {
     }
   };
 
+  /** Label registry, needed only to resolve label names in `label_filter` to IDs. */
+  @state() private _labelRegistry?: LabelRegistryEntry[];
+  private _labelsRequested = false;
+  private _labelFilter?: ResolvedLabelFilter;
+
   private _index?: AreaIndex;
   private _indexDeps: unknown[] = [];
   private _watched = new Set<string>();
@@ -125,6 +132,8 @@ export class AreaPulseCard extends LitElement {
   setConfig(config: AreaPulseCardConfig): void {
     if (!config) throw new Error("Invalid configuration");
     if (config.actions && !Array.isArray(config.actions)) throw new Error("`actions` must be a list");
+    if (config.label_filter && (typeof config.label_filter !== "object" || Array.isArray(config.label_filter)))
+      throw new Error("`label_filter` must be a map with `include` and/or `exclude`");
     this._config = { ...config };
     this.layout = config.layout === "compact" ? "compact" : "default";
     this._popup = undefined;
@@ -182,15 +191,40 @@ export class AreaPulseCard extends LitElement {
     const config = this._config;
     if (!hass || !config) return;
     this.dark = !!hass.themes?.darkMode;
-    const deps = [hass.entities, hass.devices, hass.areas, config];
+    this._ensureLabelRegistry();
+    const deps = [hass.entities, hass.devices, hass.areas, config, this._labelRegistry];
     if (!this._index || deps.some((d, i) => d !== this._indexDeps[i])) {
-      this._index = indexArea(hass, config.area, config.exclude_entities ?? []);
+      this._labelFilter = resolveLabelFilter(config.label_filter, this._labelRegistry);
+      this._index = indexArea(hass, config.area, config.exclude_entities ?? [], this._labelFilter);
       this._indexDeps = deps;
       const area = hass.areas?.[config.area];
       this._watched = watchedEntities(config, this._index);
       if (area?.temperature_entity_id) this._watched.add(area.temperature_entity_id);
       if (area?.humidity_entity_id) this._watched.add(area.humidity_entity_id);
     }
+  }
+
+  /** Label names in the config need the registry to become IDs. IDs work without it. */
+  private _ensureLabelRegistry() {
+    if (this._labelsRequested || !this.hass || !hasLabelFilter(this._config?.label_filter)) return;
+    this._labelsRequested = true;
+    loadLabelRegistry(this.hass)
+      .then((registry) => (this._labelRegistry = registry))
+      .catch(() => undefined); // keep going with IDs only
+  }
+
+  /** The area index, computed on demand when render runs before willUpdate has cached one. */
+  private _getIndex(): AreaIndex {
+    const { hass, _config: config } = this;
+    return (
+      this._index ??
+      indexArea(
+        hass!,
+        config!.area,
+        config!.exclude_entities ?? [],
+        resolveLabelFilter(config!.label_filter, this._labelRegistry)
+      )
+    );
   }
 
   // ---- Render -------------------------------------------------------------
@@ -202,7 +236,7 @@ export class AreaPulseCard extends LitElement {
     if (!config.area) return this._warning(localize(hass, "pick_area"));
     const area = hass.areas?.[config.area];
     if (!area) return this._warning(localize(hass, "area_not_found", { area: config.area }));
-    const index = this._index ?? indexArea(hass, config.area, config.exclude_entities ?? []);
+    const index = this._getIndex();
 
     const groups = buildGroups(hass, config, index);
     const temperature = reading(hass, index, "temperature", config.temperature_entity ?? area.temperature_entity_id);
@@ -210,7 +244,7 @@ export class AreaPulseCard extends LitElement {
     const extras = (config.sensor_classes ?? [])
       .map((c) => reading(hass, index, c))
       .filter((r): r is Reading => !!r);
-    const actions = (config.actions ?? []).map((a) => resolveAction(hass, a, area, groups, index));
+    const actions = (config.actions ?? []).map((a) => resolveAction(hass, a, area, groups, index, !!this._labelFilter?.active));
 
     const presence = groups.presence;
     const occupied = !!presence?.active.length;
@@ -293,6 +327,7 @@ export class AreaPulseCard extends LitElement {
             </div>
             ${this._renderClimate(temperature, humidity)}
           </div>
+          ${this._renderLabelHint(index)}
           ${alerts.length ? this._renderAlertBanner(alerts) : nothing}
           ${this._renderChips(groups, extras)}
           ${actions.length ? this._renderActions(actions) : nothing}
@@ -303,6 +338,19 @@ export class AreaPulseCard extends LitElement {
   }
 
   private _stop = (ev: Event) => ev.stopPropagation();
+
+  /** Explain an empty card when a label filter, not an empty area, is the reason. */
+  private _renderLabelHint(index: AreaIndex) {
+    const filter = this._labelFilter;
+    if (!filter?.active || filter.include.size === 0) return nothing;
+    if (index.primary.length > 0 || index.unfilteredCount === 0) return nothing;
+    return html`
+      <div class="hint">
+        <ha-icon icon="mdi:label-off-outline"></ha-icon>
+        <span>${localize(this.hass, "no_label_match", { labels: filter.includeNames.join(", ") })}</span>
+      </div>
+    `;
+  }
 
   private _warning(text: string) {
     return html`<ha-card><div class="warning"><ha-icon icon="mdi:alert-outline"></ha-icon>${text}</div></ha-card>`;
@@ -592,8 +640,7 @@ export class AreaPulseCard extends LitElement {
 
   private _currentGroups(): Partial<Record<GroupId, Group>> {
     if (!this.hass || !this._config) return {};
-    const index = this._index ?? indexArea(this.hass, this._config.area, this._config.exclude_entities ?? []);
-    return buildGroups(this.hass, this._config, index);
+    return buildGroups(this.hass, this._config, this._getIndex());
   }
 
   private _sortedEntities(group: Group): string[] {

@@ -32,6 +32,9 @@ function areaAction(service: string, areaId: string, extra: Partial<ActionConfig
   return { action: "perform-action", perform_action: service, target: { area_id: areaId }, ...extra };
 }
 
+/** Domains `everything_off` switches off when a label filter narrows it to specific entities. */
+const OFF_DOMAINS = new Set(["light", "switch", "fan", "media_player", "input_boolean", "climate"]);
+
 /** Default action for a plain entity button. */
 function entityDefaultAction(entity: string): ActionConfig {
   const domain = entity.split(".")[0];
@@ -66,9 +69,24 @@ export function resolveAction(
   cfg: QuickActionConfig,
   area: AreaRegistryEntry,
   groups: Partial<Record<string, Group>>,
-  _index: AreaIndex
+  index: AreaIndex,
+  /**
+   * True when a label filter is active. The area presets then target only the entities the card
+   * shows, so "Lights off" never switches off lights the user chose to keep off the card.
+   */
+  filtered = false
 ): ResolvedAction {
   const areaName = area.name;
+  // A service on the whole area, or, with a label filter, on the group's entities only.
+  const scoped = (service: string, groupId: string, extra: Partial<ActionConfig> = {}): ActionConfig =>
+    filtered
+      ? {
+          action: "perform-action",
+          perform_action: service,
+          target: { entity_id: [...(groups[groupId]?.entities ?? [])] },
+          ...extra,
+        }
+      : areaAction(service, area.area_id, extra);
   const lightsOn = (groups.lights?.active.length ?? 0) > 0;
   const stateObj = cfg.entity ? hass.states[cfg.entity] : undefined;
   let base: Omit<ResolvedAction, "hold_action" | "double_tap_action">;
@@ -81,7 +99,7 @@ export function resolveAction(
         active: lightsOn,
         color: "var(--apc-amber)",
         disabled: !groups.lights,
-        tap_action: areaAction(lightsOn ? "light.turn_off" : "light.turn_on", area.area_id),
+        tap_action: scoped(lightsOn ? "light.turn_off" : "light.turn_on", "lights"),
       };
       break;
     case "lights_on":
@@ -91,7 +109,7 @@ export function resolveAction(
         active: false,
         color: "var(--apc-amber)",
         disabled: !groups.lights,
-        tap_action: areaAction("light.turn_on", area.area_id),
+        tap_action: scoped("light.turn_on", "lights"),
       };
       break;
     case "lights_off":
@@ -101,7 +119,7 @@ export function resolveAction(
         active: false,
         color: "var(--apc-amber)",
         disabled: !groups.lights,
-        tap_action: areaAction("light.turn_off", area.area_id),
+        tap_action: scoped("light.turn_off", "lights"),
       };
       break;
     case "covers_open":
@@ -111,7 +129,7 @@ export function resolveAction(
         active: false,
         color: "var(--apc-purple)",
         disabled: !groups.covers,
-        tap_action: areaAction("cover.open_cover", area.area_id),
+        tap_action: scoped("cover.open_cover", "covers"),
       };
       break;
     case "covers_close":
@@ -121,7 +139,7 @@ export function resolveAction(
         active: false,
         color: "var(--apc-purple)",
         disabled: !groups.covers,
-        tap_action: areaAction("cover.close_cover", area.area_id),
+        tap_action: scoped("cover.close_cover", "covers"),
       };
       break;
     case "fans_off":
@@ -131,7 +149,7 @@ export function resolveAction(
         active: false,
         color: "var(--apc-cyan)",
         disabled: !groups.fans,
-        tap_action: areaAction("fan.turn_off", area.area_id),
+        tap_action: scoped("fan.turn_off", "fans"),
       };
       break;
     case "media_stop":
@@ -141,7 +159,7 @@ export function resolveAction(
         active: (groups.media?.active.length ?? 0) > 0,
         color: "var(--apc-indigo)",
         disabled: !groups.media,
-        tap_action: areaAction("media_player.media_stop", area.area_id),
+        tap_action: scoped("media_player.media_stop", "media"),
       };
       break;
     case "vacuum_area": {
@@ -169,9 +187,16 @@ export function resolveAction(
         active: false,
         color: "var(--apc-red)",
         disabled: false,
-        tap_action: areaAction("homeassistant.turn_off", area.area_id, {
+        tap_action: {
+          ...(filtered
+            ? {
+                action: "perform-action" as const,
+                perform_action: "homeassistant.turn_off",
+                target: { entity_id: index.primary.filter((id) => OFF_DOMAINS.has(id.split(".")[0])) },
+              }
+            : areaAction("homeassistant.turn_off", area.area_id)),
           confirmation: { text: localize(hass, "confirm_everything_off", { area: areaName }) },
-        }),
+        },
       };
       break;
     default: {
