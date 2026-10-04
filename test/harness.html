@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Area Pulse Card – test harness</title>
+<script src="icons.js"></script>
+<style>
+  :root {
+    --primary-color: #03a9f4;
+    --primary-text-color: #212121;
+    --secondary-text-color: #727272;
+    --card-background-color: #ffffff;
+    --divider-color: #e0e0e0;
+    --amber-color: #ffc107; --orange-color: #ff9800; --deep-orange-color: #ff6f22;
+    --red-color: #f44336; --green-color: #4caf50; --blue-color: #2196f3; --light-blue-color: #03a9f4;
+    --cyan-color: #00bcd4; --teal-color: #009688; --indigo-color: #3f51b5; --purple-color: #926bc7;
+    --ha-card-border-radius: 12px;
+    font-family: Roboto, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { margin: 0; padding: 24px; background: #fafafa; }
+  body.dark {
+    --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b;
+    --card-background-color: #1c1c1c; --divider-color: rgba(225,225,225,.12);
+    background: #111111;
+  }
+  .grid { display: grid; grid-template-columns: repeat(3, 380px); gap: 16px; align-items: start; }
+  .cap { font: 12px system-ui; color: var(--secondary-text-color); margin: 0 0 6px 2px; }
+  #log { font: 12px monospace; color: var(--secondary-text-color); margin-top: 16px; white-space: pre-wrap; }
+</style>
+<script>
+  // --- Stubs for HA's own elements -------------------------------------------------
+  const ALIAS = { "mdi:molecule-co2": "mdi:molecule-co-2" };
+  class HaIcon extends HTMLElement {
+    static get observedAttributes() { return ["icon"]; }
+    set icon(v) { this._icon = v; this.draw(); } get icon() { return this._icon; }
+    attributeChangedCallback() { this._icon = this.getAttribute("icon"); this.draw(); }
+    connectedCallback() { this.style.display = "inline-flex"; this.draw(); }
+    draw() {
+      if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+      const p = window.MDI[ALIAS[this._icon] || this._icon];
+      const s = "var(--mdc-icon-size, 24px)";
+      this.shadowRoot.innerHTML = p ? `<svg viewBox="0 0 24 24" style="width:${s};height:${s};fill:currentColor"><path d="${p}"/></svg>` : `<span style="width:${s};height:${s};display:inline-block;background:red"></span>`;
+    }
+  }
+  customElements.define("ha-icon", HaIcon);
+  class HaStateIcon extends HaIcon {
+    set stateObj(s) { const d = s.entity_id.split(".")[0]; const dc = s.attributes.device_class;
+      this.icon = s.attributes.icon || ({ window: s.state === "on" ? "mdi:window-open-variant" : "mdi:window-closed-variant", door: s.state === "on" ? "mdi:door-open" : "mdi:door-closed", moisture: "mdi:water-alert" })[dc] || ({ light: s.state === "on" ? "mdi:lightbulb-on" : "mdi:lightbulb" })[d] || "mdi:gauge"; }
+  }
+  customElements.define("ha-state-icon", HaStateIcon);
+  class HaCard extends HTMLElement {
+    constructor() { super(); this.attachShadow({ mode: "open" }).innerHTML = `<style>:host{display:block;background:var(--ha-card-background,var(--card-background-color));
+      border-radius:var(--ha-card-border-radius,12px);border:var(--ha-card-border-width,1px) solid var(--ha-card-border-color,var(--divider-color));
+      color:var(--primary-text-color);box-sizing:border-box}</style><slot></slot>`; }
+  }
+  customElements.define("ha-card", HaCard);
+</script>
+<script type="module">
+  import "../dist/area-pulse-card.js";
+
+  const now = Date.now();
+  const ago = (m) => new Date(now - m * 60000).toISOString();
+  const st = (entity_id, state, attributes = {}, minsAgo = 5) => ({ entity_id, state, attributes, last_changed: ago(minsAgo), last_updated: ago(minsAgo) });
+
+  const states = {};
+  const entities = {};
+  const add = (s, area, extra = {}) => { states[s.entity_id] = s; entities[s.entity_id] = { entity_id: s.entity_id, area_id: area, ...extra }; };
+
+  // Living room: occupied, lights on, a window open, media playing, climate heating, CO2 + illuminance.
+  add(st("binary_sensor.living_room_presence", "on", { friendly_name: "Living Room Presence", device_class: "occupancy" }, 12), "living_room");
+  add(st("binary_sensor.living_room_motion", "on", { friendly_name: "Living Room Motion", device_class: "motion" }, 1), "living_room");
+  add(st("sensor.living_room_temperature", "22.4", { friendly_name: "Living Room Temperature", device_class: "temperature", unit_of_measurement: "°C" }), "living_room");
+  add(st("sensor.living_room_tv_temp", "22.8", { friendly_name: "TV area temperature", device_class: "temperature", unit_of_measurement: "°C" }), "living_room");
+  add(st("sensor.living_room_humidity", "47", { friendly_name: "Living Room Humidity", device_class: "humidity", unit_of_measurement: "%" }), "living_room");
+  add(st("sensor.living_room_co2", "1120", { friendly_name: "Living Room CO2", device_class: "carbon_dioxide", unit_of_measurement: "ppm" }), "living_room");
+  add(st("sensor.living_room_lux", "184", { friendly_name: "Living Room Illuminance", device_class: "illuminance", unit_of_measurement: "lx" }), "living_room");
+  add(st("binary_sensor.living_room_window_left", "on", { friendly_name: "Living Room Window Left", device_class: "window" }, 34), "living_room");
+  add(st("binary_sensor.living_room_window_right", "off", { friendly_name: "Living Room Window Right", device_class: "window" }, 300), "living_room");
+  add(st("binary_sensor.balcony_door", "off", { friendly_name: "Balcony Door", device_class: "door" }, 90), "living_room");
+  add(st("light.living_room_ceiling", "on", { friendly_name: "Living Room Ceiling" }, 40), "living_room");
+  add(st("light.living_room_floor_lamp", "on", { friendly_name: "Living Room Floor Lamp" }, 40), "living_room");
+  add(st("light.living_room_led_strip", "off", { friendly_name: "Living Room LED Strip" }, 400), "living_room");
+  add(st("media_player.sonos_beam", "playing", { friendly_name: "Sonos Beam", media_title: "Midnight City" }, 8), "living_room");
+  add(st("climate.living_room_ac", "heat", { friendly_name: "Living Room AC", hvac_action: "heating", temperature: 23 }, 20), "living_room");
+  add(st("cover.living_room_blinds", "closed", { friendly_name: "Living Room Blinds" }, 500), "living_room");
+  add(st("sensor.living_room_window_left_battery", "14", { friendly_name: "Window Left Battery", device_class: "battery", unit_of_measurement: "%" }), "living_room", { entity_category: "diagnostic" });
+  add(st("vacuum.roborock", "docked", { friendly_name: "Roborock" }), "hallway");
+  add(st("scene.living_room_movie", "2026-10-01T20:00:00", { friendly_name: "Movie Night" }), "living_room");
+
+  // Kitchen: water leak alert, clear, warm.
+  add(st("binary_sensor.kitchen_motion", "off", { friendly_name: "Kitchen Motion", device_class: "motion" }, 47), "kitchen");
+  add(st("binary_sensor.kitchen_sink_leak", "on", { friendly_name: "Kitchen Sink Leak", device_class: "moisture" }, 2), "kitchen");
+  add(st("sensor.kitchen_temperature", "26.1", { friendly_name: "Kitchen Temperature", device_class: "temperature", unit_of_measurement: "°C" }), "kitchen");
+  add(st("sensor.kitchen_humidity", "71", { friendly_name: "Kitchen Humidity", device_class: "humidity", unit_of_measurement: "%" }), "kitchen");
+  add(st("light.kitchen", "off", { friendly_name: "Kitchen Lights" }, 47), "kitchen");
+  add(st("binary_sensor.kitchen_window", "off", { friendly_name: "Kitchen Window", device_class: "window" }, 600), "kitchen");
+
+  // Bedroom: clear, cold, compact.
+  add(st("binary_sensor.bedroom_presence", "off", { friendly_name: "Bedroom Presence", device_class: "presence" }, 125), "bedroom");
+  add(st("sensor.bedroom_temperature", "18.2", { friendly_name: "Bedroom Temperature", device_class: "temperature", unit_of_measurement: "°C" }), "bedroom");
+  add(st("sensor.bedroom_humidity", "52", { friendly_name: "Bedroom Humidity", device_class: "humidity", unit_of_measurement: "%" }), "bedroom");
+  add(st("light.bedroom", "off", { friendly_name: "Bedroom Light" }, 125), "bedroom");
+  add(st("lock.bedroom_balcony", "unlocked", { friendly_name: "Bedroom Balcony Lock" }, 30), "bedroom");
+  add(st("cover.bedroom_shutter", "open", { friendly_name: "Bedroom Shutter" }, 400), "bedroom");
+
+  const areas = {
+    living_room: { area_id: "living_room", name: "Living Room", icon: "mdi:sofa" },
+    kitchen: { area_id: "kitchen", name: "Kitchen", icon: "mdi:stove" },
+    bedroom: { area_id: "bedroom", name: "Bedroom", icon: "mdi:bed" },
+    hallway: { area_id: "hallway", name: "Hallway" },
+  };
+
+  const calls = [];
+  const lang = new URLSearchParams(location.search).get("lang") || "en";
+  window.hass = {
+    states, entities, devices: {}, areas, language: lang, locale: { language: lang },
+    callService: async (...a) => calls.push(a),
+    formatEntityState: (s) => ({ on: "On", off: "Off", playing: "Playing", unlocked: "Unlocked", open: "Open", closed: "Closed" })[s.state] ?? s.state,
+  };
+  if (new URLSearchParams(location.search).get("dark")) document.body.classList.add("dark");
+
+  const configs = [
+    { type: "custom:area-pulse-card", area: "living_room", sensor_classes: ["carbon_dioxide", "illuminance"],
+      actions: [{ preset: "lights_toggle" }, { entity: "scene.living_room_movie", name: "Movie", icon: "mdi:movie-open" }, { preset: "vacuum_area", entity: "vacuum.roborock" }, { preset: "everything_off" }],
+      tap_action: { action: "navigate", navigation_path: "/dashboard-home/living-room" } },
+    { type: "custom:area-pulse-card", area: "kitchen", show_inactive: true, actions: [{ preset: "lights_on" }, { preset: "lights_off" }] },
+    { type: "custom:area-pulse-card", area: "bedroom", layout: "compact", show_inactive: true, actions: [{ preset: "lights_toggle" }, { preset: "covers_close" }, { preset: "everything_off" }] },
+  ];
+  const grid = document.querySelector(".grid");
+  window.cards = configs.map((c) => {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `<div class="cap">${c.area}${c.layout ? " · " + c.layout : ""}</div>`;
+    const card = document.createElement("area-pulse-card");
+    card.setConfig(c);
+    card.hass = window.hass;
+    wrap.appendChild(card);
+    grid.appendChild(wrap);
+    return card;
+  });
+  window.events = [];
+  for (const ev of ["hass-action", "hass-more-info"]) document.addEventListener(ev, (e) => window.events.push({ type: ev, detail: e.detail }));
+  window.harnessReady = true;
+</script>
+</head>
+<body>
+  <div class="grid"></div>
+  <div id="log"></div>
+</body>
+</html>

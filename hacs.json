@@ -1,0 +1,6 @@
+{
+  "name": "Area Pulse Card",
+  "filename": "area-pulse-card.js",
+  "render_readme": true,
+  "homeassistant": "2025.7.0"
+}
