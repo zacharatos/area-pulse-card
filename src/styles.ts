@@ -15,12 +15,22 @@ export const cardStyles = css`
     --apc-teal: var(--teal-color, #009688);
     --apc-indigo: var(--indigo-color, #3f51b5);
     --apc-purple: var(--purple-color, #926bc7);
+    /* Climate colouring: cold blue / warm red, dry white / humid blue. */
+    --apc-temp-low: var(--apc-blue);
+    --apc-temp-high: var(--apc-red);
+    --apc-hum-low: #8fa4ae; /* white is invisible on a light card, so light themes get a pale blue-grey */
+    --apc-hum-high: var(--apc-blue);
+    --apc-glow-rgb: 255, 193, 7;
+    --apc-glow-alpha: 0.16;
     --apc-neutral-bg: color-mix(in srgb, var(--primary-text-color) 6%, transparent);
     --apc-neutral-bg-hover: color-mix(in srgb, var(--primary-text-color) 10%, transparent);
     --apc-radius: var(--ha-card-border-radius, 12px);
     --apc-control-radius: var(--ha-card-features-border-radius, var(--feature-border-radius, 12px));
     display: block;
     height: 100%;
+  }
+  :host([dark]) {
+    --apc-hum-low: #ffffff;
   }
 
   ha-card {
@@ -56,8 +66,8 @@ export const cardStyles = css`
     transition: opacity 600ms ease;
     background: radial-gradient(
       140% 100% at 0% 0%,
-      color-mix(in srgb, var(--apc-amber) 13%, transparent) 0%,
-      transparent 55%
+      rgba(var(--apc-glow-rgb), var(--apc-glow-alpha)) 0%,
+      transparent 58%
     );
   }
   .glow.on {
@@ -104,6 +114,20 @@ export const cardStyles = css`
   .area-icon.occupied {
     background: color-mix(in srgb, var(--apc-accent) 20%, transparent);
     color: var(--apc-accent);
+  }
+  .area-icon.linked {
+    cursor: pointer;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 300ms ease, color 300ms ease, transform 120ms ease;
+  }
+  .area-icon.linked:hover { background: var(--apc-neutral-bg-hover); }
+  .area-icon.linked:active { transform: scale(0.94); }
+  .area-icon.linked:focus-visible { box-shadow: 0 0 0 2px var(--apc-accent); }
+  .area-icon.light-on,
+  .area-icon.light-on:hover {
+    background: rgba(var(--apc-light-rgb), 0.24);
+    color: rgb(var(--apc-light-rgb));
   }
   .presence-dot {
     position: absolute;
@@ -182,8 +206,8 @@ export const cardStyles = css`
     color: var(--secondary-text-color);
     letter-spacing: 0;
   }
-  .temp.low { color: var(--apc-light-blue); }
-  .temp.high { color: var(--apc-deep-orange); }
+  .temp.low { color: var(--apc-temp-low); }
+  .temp.high { color: var(--apc-temp-high); }
   .hum {
     display: flex;
     align-items: center;
@@ -194,7 +218,8 @@ export const cardStyles = css`
     cursor: pointer;
     --mdc-icon-size: 14px;
   }
-  .hum.low, .hum.high { color: var(--apc-orange); }
+  .hum.low { color: var(--apc-hum-low); }
+  .hum.high { color: var(--apc-hum-high); }
 
   /* Alert banner */
   .alert-banner {
@@ -223,7 +248,12 @@ export const cardStyles = css`
     50% { opacity: 0.35; }
   }
 
-  /* Status chips */
+  /* Status chips: two invisible rows (openings & motion, then everything else) */
+  .chip-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
   .chips {
     display: flex;
     flex-wrap: wrap;
@@ -268,48 +298,6 @@ export const cardStyles = css`
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
-  /* Detail drawer */
-  .drawer {
-    display: flex;
-    flex-direction: column;
-    padding: 4px;
-    border-radius: var(--apc-control-radius);
-    background: var(--apc-neutral-bg);
-    animation: apc-drawer 180ms ease-out;
-  }
-  @keyframes apc-drawer {
-    from { opacity: 0; transform: translateY(-4px); }
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 8px;
-    border-radius: calc(var(--apc-control-radius) - 4px);
-    cursor: pointer;
-    min-width: 0;
-    --mdc-icon-size: 20px;
-  }
-  .row:hover { background: var(--apc-neutral-bg); }
-  .row ha-state-icon, .row ha-icon { color: var(--secondary-text-color); flex: none; }
-  .row.active ha-state-icon, .row.active ha-icon { color: var(--c, var(--apc-accent)); }
-  .row .row-name {
-    flex: 1;
-    min-width: 0;
-    font-size: 14px;
-    color: var(--primary-text-color);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .row .row-state {
-    flex: none;
-    font-size: 12px;
-    color: var(--secondary-text-color);
-    text-align: right;
-  }
-  .row .row-state .ago { display: block; font-size: 11px; opacity: 0.75; }
 
   /* Quick actions */
   .actions {
@@ -398,6 +386,5 @@ export const cardStyles = css`
 
   @media (prefers-reduced-motion: reduce) {
     .presence-dot::after, .alert-banner ha-icon { animation: none; }
-    .drawer { animation: none; }
   }
 `;

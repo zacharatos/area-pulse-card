@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import type { AreaPulseCardConfig, HomeAssistant, QuickActionConfig } from "./types";
-import { DEFAULT_ALERT_CLASSES, DEFAULT_GROUPS, SENSOR_CLASS_OPTIONS } from "./discovery";
+import { DEFAULT_ALERT_CLASSES, DEFAULT_GROUPS, DEFAULT_TOP_GROUPS, SENSOR_CLASS_OPTIONS } from "./discovery";
 import { PRESETS } from "./presets";
 import { localize } from "./localize";
 
@@ -90,6 +90,8 @@ export class AreaPulseCardEditor extends LitElement {
         ],
       },
       { name: "show_picture", selector: { boolean: {} } },
+      { name: "link_main_light", selector: { boolean: {} } },
+      { name: "main_light", selector: { entity: { filter: { domain: "light" } } } },
       {
         type: "expandable",
         name: "",
@@ -113,6 +115,16 @@ export class AreaPulseCardEditor extends LitElement {
               { name: "comfort_temp_max", selector: { number: { mode: "box", step: 0.5 } } },
               { name: "comfort_hum_min", selector: { number: { mode: "box", min: 0, max: 100 } } },
               { name: "comfort_hum_max", selector: { number: { mode: "box", min: 0, max: 100 } } },
+            ],
+          },
+          {
+            type: "grid",
+            name: "",
+            schema: [
+              { name: "color_temp_low", selector: { ui_color: {} } },
+              { name: "color_temp_high", selector: { ui_color: {} } },
+              { name: "color_hum_low", selector: { ui_color: {} } },
+              { name: "color_hum_high", selector: { ui_color: {} } },
             ],
           },
           {
@@ -143,6 +155,20 @@ export class AreaPulseCardEditor extends LitElement {
                 reorder: true,
                 mode: "list",
                 options: DEFAULT_GROUPS.filter((g) => g !== "presence").map((g) => ({
+                  value: g,
+                  label: t(`g_${g}`),
+                })),
+              },
+            },
+          },
+          {
+            name: "top_groups",
+            selector: {
+              select: {
+                multiple: true,
+                reorder: true,
+                mode: "list",
+                options: DEFAULT_GROUPS.filter((g) => g !== "presence" && g !== "alerts").map((g) => ({
                   value: g,
                   label: t(`g_${g}`),
                 })),
@@ -232,6 +258,13 @@ export class AreaPulseCardEditor extends LitElement {
       comfort_hum_min: "ed_comfort_hum_min",
       comfort_hum_max: "ed_comfort_hum_max",
       groups: "ed_groups",
+      top_groups: "ed_top_groups",
+      main_light: "ed_main_light",
+      link_main_light: "ed_link_main_light",
+      color_temp_low: "ed_color_temp_low",
+      color_temp_high: "ed_color_temp_high",
+      color_hum_low: "ed_color_hum_low",
+      color_hum_high: "ed_color_hum_high",
       alert_classes: "ed_alert_classes",
       presence_entities: "ed_presence_entities",
       exclude_entities: "ed_exclude_entities",
@@ -258,7 +291,13 @@ export class AreaPulseCardEditor extends LitElement {
       show_picture: true,
       show_inactive: false,
       battery_threshold: 20,
+      link_main_light: true,
+      top_groups: DEFAULT_TOP_GROUPS,
       ...c,
+      color_temp_low: c.colors?.temperature_low,
+      color_temp_high: c.colors?.temperature_high,
+      color_hum_low: c.colors?.humidity_low,
+      color_hum_high: c.colors?.humidity_high,
       comfort_temp_min: tb.min,
       comfort_temp_max: tb.max,
       comfort_hum_min: hb.min,
@@ -277,6 +316,15 @@ export class AreaPulseCardEditor extends LitElement {
     delete v.comfort_temp_max;
     delete v.comfort_hum_min;
     delete v.comfort_hum_max;
+    const colors = clean({
+      temperature_low: v.color_temp_low,
+      temperature_high: v.color_temp_high,
+      humidity_low: v.color_hum_low,
+      humidity_high: v.color_hum_high,
+    } as Record<string, unknown>);
+    for (const k of ["color_temp_low", "color_temp_high", "color_hum_low", "color_hum_high"]) delete v[k];
+    v.colors = Object.keys(colors).length ? colors : undefined;
+    if (JSON.stringify(v.top_groups) === JSON.stringify(DEFAULT_TOP_GROUPS)) delete v.top_groups;
     const next = clean({
       ...v,
       comfort_temperature: comfort_temperature && Object.keys(comfort_temperature).length ? comfort_temperature : undefined,
@@ -288,6 +336,7 @@ export class AreaPulseCardEditor extends LitElement {
     if ((next as any).show_picture === true) delete (next as any).show_picture;
     if ((next as any).show_inactive === false) delete (next as any).show_inactive;
     if ((next as any).battery_threshold === 20) delete (next as any).battery_threshold;
+    if ((next as any).link_main_light === true) delete (next as any).link_main_light;
     this._commit(next);
   }
 

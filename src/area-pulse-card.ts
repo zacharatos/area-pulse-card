@@ -15,7 +15,10 @@ import {
   buildGroups,
   comfortState,
   DEFAULT_GROUPS,
+  DEFAULT_TOP_GROUPS,
+  findMainLight,
   indexArea,
+  lightColor,
   reading,
   watchedEntities,
   type AreaIndex,
@@ -26,9 +29,10 @@ import { cssColor, resolveAction, type ResolvedAction } from "./presets";
 import { actionHandler, type ActionKind } from "./action-handler";
 import { localize } from "./localize";
 import { cardStyles } from "./styles";
+import { popupStyles } from "./popup-styles";
 import "./editor";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 interface GroupMeta {
   icon: string;
@@ -45,6 +49,7 @@ const GROUP_META: Record<GroupId, GroupMeta> = {
   locks: { icon: "mdi:lock-open-variant", iconOff: "mdi:lock", color: "var(--apc-deep-orange)" },
   lights: { icon: "mdi:lightbulb-on", iconOff: "mdi:lightbulb-outline", color: "var(--apc-amber)" },
   fans: { icon: "mdi:fan", iconOff: "mdi:fan-off", color: "var(--apc-light-blue)" },
+  switches: { icon: "mdi:power-socket-eu", iconOff: "mdi:power-plug-off-outline", color: "var(--apc-teal)" },
   media: { icon: "mdi:play-circle", iconOff: "mdi:speaker", color: "var(--apc-indigo)" },
   climate: { icon: "mdi:thermostat", iconOff: "mdi:thermostat", color: "var(--apc-deep-orange)" },
   alerts: { icon: "mdi:alert", iconOff: "mdi:shield-check", color: "var(--apc-red)" },
@@ -78,12 +83,25 @@ declare global {
 }
 
 export class AreaPulseCard extends LitElement {
-  static styles = cardStyles;
+  static styles = [cardStyles, popupStyles];
 
   @property({ attribute: false }) hass?: HomeAssistant;
   @property({ reflect: true }) layout: "default" | "compact" = "default";
+  @property({ type: Boolean, reflect: true }) dark = false;
   @state() private _config?: AreaPulseCardConfig;
-  @state() private _expanded?: GroupId;
+  /** Group shown in the popup. */
+  @state() private _popup?: GroupId;
+  /** Native tile cards for the popup; null means HA's card helpers are unavailable and fallback tiles are drawn. */
+  @state() private _tiles?: HTMLElement[] | null;
+  /** Popup to restore after a more-info dialog opened from it is closed. */
+  private _reopen?: GroupId;
+  private _onDialogClosed = () => {
+    if (this._reopen) {
+      const id = this._reopen;
+      this._reopen = undefined;
+      this._openPopup(id);
+    }
+  };
 
   private _index?: AreaIndex;
   private _indexDeps: unknown[] = [];
@@ -109,7 +127,7 @@ export class AreaPulseCard extends LitElement {
     if (config.actions && !Array.isArray(config.actions)) throw new Error("`actions` must be a list");
     this._config = { ...config };
     this.layout = config.layout === "compact" ? "compact" : "default";
-    this._expanded = undefined;
+    this._popup = undefined;
     this._indexDeps = [];
   }
 
@@ -128,11 +146,13 @@ export class AreaPulseCard extends LitElement {
     super.connectedCallback();
     // Keeps "for 12 min" labels fresh without depending on state changes.
     this._ticker = window.setInterval(() => this.requestUpdate(), 30_000);
+    window.addEventListener("dialog-closed", this._onDialogClosed);
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this._ticker) window.clearInterval(this._ticker);
+    window.removeEventListener("dialog-closed", this._onDialogClosed);
   }
 
   protected shouldUpdate(changed: PropertyValues): boolean {
@@ -140,6 +160,8 @@ export class AreaPulseCard extends LitElement {
     if (!changed.has("hass") || changed.size > 1) return true;
     const old = changed.get("hass") as HomeAssistant | undefined;
     const hass = this.hass;
+    // Popup tiles are real cards: keep them live even when nothing on this card changed.
+    if (hass && this._tiles) for (const t of this._tiles) (t as unknown as { hass: HomeAssistant }).hass = hass;
     if (!old || !hass) return true;
     if (
       old.entities !== hass.entities ||
@@ -159,6 +181,7 @@ export class AreaPulseCard extends LitElement {
     const hass = this.hass;
     const config = this._config;
     if (!hass || !config) return;
+    this.dark = !!hass.themes?.darkMode;
     const deps = [hass.entities, hass.devices, hass.areas, config];
     if (!this._index || deps.some((d, i) => d !== this._indexDeps[i])) {
       this._index = indexArea(hass, config.area, config.exclude_entities ?? []);
@@ -192,18 +215,48 @@ export class AreaPulseCard extends LitElement {
     const presence = groups.presence;
     const occupied = !!presence?.active.length;
     const alerts = groups.alerts?.active ?? [];
-    const lightsOn = !!groups.lights?.active.length;
     const accent = config.color ? cssColor(config.color) : undefined;
     const showPicture = config.show_picture !== false && !!area.picture;
     const headerHasAction = this._hasAction(config.tap_action) || this._hasAction(config.hold_action);
 
+    // Main light drives the icon and the ambient glow colour.
+    const mainLight = findMainLight(hass, config, index);
+    const mainState = mainLight ? hass.states[mainLight] : undefined;
+    const mainOn = mainState?.state === "on";
+    const glowSource = mainOn
+      ? mainState
+      : (groups.lights?.active ?? []).map((id) => hass.states[id]).find((s) => !!s);
+    const glowRgb = glowSource ? lightColor(glowSource) ?? [255, 193, 7] : undefined;
+    const brightness = Number(glowSource?.attributes.brightness ?? 255);
+    const glowStrength = 0.1 + 0.12 * Math.min(1, Math.max(0, brightness / 255));
+    const mainRgb = mainOn ? lightColor(mainState) ?? [255, 193, 7] : undefined;
+
+    const cardStyle: Record<string, string> = {};
+    if (accent) cardStyle["--apc-accent"] = accent;
+    if (glowRgb) {
+      cardStyle["--apc-glow-rgb"] = glowRgb.join(",");
+      cardStyle["--apc-glow-alpha"] = glowStrength.toFixed(3);
+    }
+    if (mainRgb) cardStyle["--apc-light-rgb"] = mainRgb.join(",");
+    const colors = config.colors ?? {};
+    if (colors.temperature_low) cardStyle["--apc-temp-low"] = cssColor(colors.temperature_low);
+    if (colors.temperature_high) cardStyle["--apc-temp-high"] = cssColor(colors.temperature_high);
+    if (colors.humidity_low) cardStyle["--apc-hum-low"] = cssColor(colors.humidity_low);
+    if (colors.humidity_high) cardStyle["--apc-hum-high"] = cssColor(colors.humidity_high);
+
+    const iconClasses = {
+      "area-icon": true,
+      occupied: occupied && !mainLight,
+      linked: !!mainLight,
+      "light-on": mainOn,
+    };
+    const icon = html`<ha-icon .icon=${config.icon || area.icon || DEFAULT_ICON}></ha-icon>`;
+    const dot = occupied ? html`<span class="presence-dot"></span>` : nothing;
+
     return html`
-      <ha-card
-        class=${classMap({ alerting: alerts.length > 0 })}
-        style=${styleMap(accent ? { "--apc-accent": accent } : {})}
-      >
+      <ha-card class=${classMap({ alerting: alerts.length > 0 })} style=${styleMap(cardStyle)}>
         ${showPicture ? html`<div class="picture" style=${styleMap({ backgroundImage: `url("${area.picture}")` })}></div>` : nothing}
-        <div class=${classMap({ glow: true, on: lightsOn })}></div>
+        <div class=${classMap({ glow: true, on: !!glowRgb })}></div>
         <div class="content">
           <div
             class=${classMap({ header: true, clickable: headerHasAction })}
@@ -216,10 +269,24 @@ export class AreaPulseCard extends LitElement {
             })}
             @apc-action=${(ev: CustomEvent) => this._cardAction(ev.detail.action)}
           >
-            <div class=${classMap({ "area-icon": true, occupied })}>
-              <ha-icon .icon=${config.icon || area.icon || DEFAULT_ICON}></ha-icon>
-              ${occupied ? html`<span class="presence-dot"></span>` : nothing}
-            </div>
+            ${mainLight
+              ? html`<div
+                  class=${classMap(iconClasses)}
+                  role="button"
+                  tabindex="0"
+                  aria-pressed=${String(mainOn)}
+                  aria-label=${localize(hass, "toggle_light", { name: this._entityName(mainState) })}
+                  title=${this._entityName(mainState)}
+                  ${actionHandler({ hasHold: true })}
+                  @apc-action=${(ev: CustomEvent) => this._mainLightAction(mainLight, ev.detail.action)}
+                  @pointerdown=${this._stop}
+                  @pointerup=${this._stop}
+                  @click=${this._stop}
+                  @keydown=${this._stop}
+                >
+                  ${icon}${dot}
+                </div>`
+              : html`<div class=${classMap(iconClasses)}>${icon}${dot}</div>`}
             <div class="titles">
               <div class="name">${config.name || area.name}</div>
               <div class="secondary">${this._secondary(groups)}</div>
@@ -228,12 +295,14 @@ export class AreaPulseCard extends LitElement {
           </div>
           ${alerts.length ? this._renderAlertBanner(alerts) : nothing}
           ${this._renderChips(groups, extras)}
-          ${this._expanded && groups[this._expanded] ? this._renderDrawer(groups[this._expanded]!) : nothing}
           ${actions.length ? this._renderActions(actions) : nothing}
         </div>
       </ha-card>
+      ${this._popup && groups[this._popup] ? this._renderPopup(groups[this._popup]!, area) : nothing}
     `;
   }
+
+  private _stop = (ev: Event) => ev.stopPropagation();
 
   private _warning(text: string) {
     return html`<ha-card><div class="warning"><ha-icon icon="mdi:alert-outline"></ha-icon>${text}</div></ha-card>`;
@@ -283,7 +352,7 @@ export class AreaPulseCard extends LitElement {
           : nothing}
         ${hum
           ? html`<div class="hum ${hState}" @click=${(e: Event) => this._moreInfo(hum.entities[0], e)}>
-              <ha-icon icon="mdi:water-percent"></ha-icon>${this._num(hum.value, 0)}${hum.unit}
+              <ha-icon .icon=${hState === "low" ? "mdi:water-percent-alert" : "mdi:water-percent"}></ha-icon>${this._num(hum.value, 0)}${hum.unit}
             </div>`
           : nothing}
       </div>
@@ -303,7 +372,7 @@ export class AreaPulseCard extends LitElement {
       <div
         class="alert-banner"
         role="alert"
-        @click=${() => (alerts.length === 1 ? this._moreInfo(alerts[0]) : this._toggleExpanded("alerts"))}
+        @click=${() => (alerts.length === 1 ? this._moreInfo(alerts[0]) : this._openPopup("alerts"))}
       >
         <ha-icon icon="mdi:alert"></ha-icon>
         <span class="text">${text}</span>
@@ -314,10 +383,10 @@ export class AreaPulseCard extends LitElement {
   private _renderChips(groups: Partial<Record<GroupId, Group>>, extras: Reading[]) {
     const config = this._config!;
     const order = (config.groups ?? DEFAULT_GROUPS).filter((g) => g !== "presence");
+    const top = new Set(config.top_groups ?? DEFAULT_TOP_GROUPS);
     const showInactive = config.show_inactive === true;
-    const chips: TemplateResult[] = [];
-
-    for (const r of extras) chips.push(this._statChip(r));
+    const row1: TemplateResult[] = [];
+    const row2: TemplateResult[] = [];
 
     for (const id of order) {
       const group = groups[id];
@@ -325,12 +394,19 @@ export class AreaPulseCard extends LitElement {
       // Alerts already have a banner; batteries only matter when low.
       if (id === "alerts" && (this.layout !== "compact" || !group.active.length)) continue;
       if (id === "batteries" && !group.active.length) continue;
-      const active = group.active.length > 0;
-      if (!active && !showInactive) continue;
-      chips.push(this._groupChip(group));
+      if (!group.active.length && !showInactive) continue;
+      (top.has(id) ? row1 : row2).push(this._groupChip(group));
     }
-    if (!chips.length) return nothing;
-    return html`<div class="chips">${chips}</div>`;
+    // Passive readings close the second row.
+    for (const r of extras) row2.push(this._statChip(r));
+
+    if (!row1.length && !row2.length) return nothing;
+    return html`
+      <div class="chip-rows">
+        ${row1.length ? html`<div class="chips">${row1}</div>` : nothing}
+        ${row2.length ? html`<div class="chips">${row2}</div>` : nothing}
+      </div>
+    `
   }
 
   private _statChip(r: Reading) {
@@ -365,9 +441,9 @@ export class AreaPulseCard extends LitElement {
 
     return html`
       <button
-        class=${classMap({ chip: true, active, selected: this._expanded === group.id })}
+        class=${classMap({ chip: true, active, selected: this._popup === group.id })}
         style=${styleMap({ "--c": color })}
-        aria-expanded=${group.entities.length > 1 ? String(this._expanded === group.id) : nothing}
+        aria-haspopup=${group.entities.length > 1 ? "dialog" : nothing}
         @click=${() => this._chipClick(group)}
       >
         <ha-icon .icon=${icon}></ha-icon>
@@ -396,6 +472,8 @@ export class AreaPulseCard extends LitElement {
         return pick("light_on", "lights_on_n", "lights_off_all");
       case "fans":
         return pick("fan_on", "fans_on_n", "fans_off_all");
+      case "switches":
+        return pick("switch_on", "switches_on_n", "switches_off_all");
       case "media": {
         if (!n) return localize(hass, "media_idle");
         const s = hass.states[group.active[0]];
@@ -426,39 +504,6 @@ export class AreaPulseCard extends LitElement {
     if (typeof low === "number" && typeof high === "number")
       return `${base} · ${this._num(low, 0)}–${this._num(high, 0)}°`;
     return base;
-  }
-
-  private _renderDrawer(group: Group) {
-    const hass = this.hass!;
-    const meta = GROUP_META[group.id];
-    const sorted = [...group.entities].sort(
-      (a, b) => Number(group.active.includes(b)) - Number(group.active.includes(a))
-    );
-    return html`
-      <div class="drawer" style=${styleMap({ "--c": meta.color })}>
-        ${sorted.map((id) => {
-          const s = hass.states[id];
-          if (!s) return nothing;
-          const t = Date.parse(s.last_changed);
-          return html`
-            <div
-              class=${classMap({ row: true, active: group.active.includes(id) })}
-              role="button"
-              tabindex="0"
-              @click=${() => this._moreInfo(id)}
-              @keydown=${(e: KeyboardEvent) => e.key === "Enter" && this._moreInfo(id)}
-            >
-              <ha-state-icon .hass=${hass} .stateObj=${s}></ha-state-icon>
-              <span class="row-name">${this._entityName(s)}</span>
-              <span class="row-state">
-                ${this._formatState(s)}
-                ${Number.isNaN(t) ? nothing : html`<span class="ago">${this._ago(t)}</span>`}
-              </span>
-            </div>
-          `;
-        })}
-      </div>
-    `;
   }
 
   private _renderActions(actions: ResolvedAction[]) {
@@ -499,11 +544,12 @@ export class AreaPulseCard extends LitElement {
       this._moreInfo(group.entities[0]);
       return;
     }
-    this._toggleExpanded(group.id);
+    this._openPopup(group.id);
   }
 
-  private _toggleExpanded(id: GroupId) {
-    this._expanded = this._expanded === id ? undefined : id;
+  private _mainLightAction(entity: string, action: ActionKind) {
+    if (action === "hold") this._moreInfo(entity);
+    else this._fireAction({ entity, tap_action: { action: "toggle" } }, "tap");
   }
 
   private _cardAction(action: ActionKind) {
@@ -536,9 +582,226 @@ export class AreaPulseCard extends LitElement {
   private _moreInfo(entityId?: string, ev?: Event) {
     ev?.stopPropagation();
     if (!entityId) return;
+    if (this._popup) this._onPopupMoreInfo();
     this.dispatchEvent(
       new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId } })
     );
+  }
+
+  // ---- Popup --------------------------------------------------------------
+
+  private _currentGroups(): Partial<Record<GroupId, Group>> {
+    if (!this.hass || !this._config) return {};
+    const index = this._index ?? indexArea(this.hass, this._config.area, this._config.exclude_entities ?? []);
+    return buildGroups(this.hass, this._config, index);
+  }
+
+  private _sortedEntities(group: Group): string[] {
+    return [...group.entities].sort(
+      (a, b) =>
+        Number(group.active.includes(b)) - Number(group.active.includes(a)) ||
+        this._entityName(this.hass!.states[a]).localeCompare(this._entityName(this.hass!.states[b]))
+    );
+  }
+
+  private async _openPopup(id: GroupId) {
+    const group = this._currentGroups()[id];
+    if (!group) return;
+    this._popup = id;
+    this._tiles = undefined;
+    let helpers: { createCardElement: (c: Record<string, unknown>) => HTMLElement | Promise<HTMLElement> } | undefined;
+    try {
+      helpers = await (window as unknown as { loadCardHelpers?: () => Promise<typeof helpers> }).loadCardHelpers?.();
+    } catch {
+      helpers = undefined;
+    }
+    if (this._popup !== id) return;
+    if (!helpers) {
+      this._tiles = null;
+      return;
+    }
+    const tiles = await Promise.all(
+      this._sortedEntities(group).map(async (entity) => {
+        const el = await helpers!.createCardElement(this._tileConfig(entity));
+        (el as unknown as { hass?: HomeAssistant }).hass = this.hass;
+        return el;
+      })
+    );
+    if (this._popup === id) this._tiles = tiles;
+  }
+
+  /** Native tile card config, with the control feature that makes sense for the domain. */
+  private _tileConfig(entity: string): Record<string, unknown> {
+    const s = this.hass!.states[entity];
+    const domain = entity.split(".")[0];
+    const features: Record<string, unknown>[] = [];
+    if (domain === "light") {
+      const modes = (s?.attributes.supported_color_modes as string[] | undefined) ?? [];
+      if (modes.some((m) => m !== "onoff")) features.push({ type: "light-brightness" });
+    } else if (domain === "cover") {
+      features.push({ type: "cover-open-close" });
+    } else if (domain === "climate") {
+      features.push({ type: "target-temperature" });
+    }
+    return {
+      type: "tile",
+      entity,
+      name: this._entityName(s),
+      ...(features.length ? { features, features_position: "bottom" } : {}),
+    };
+  }
+
+  private _closePopup() {
+    this.renderRoot.querySelector<HTMLDialogElement>("dialog.apc-popup")?.close();
+  }
+
+  private _onPopupClosed() {
+    this._popup = undefined;
+    this._tiles = undefined;
+  }
+
+  private _onPopupClick(ev: MouseEvent) {
+    // Clicks on the backdrop land on the <dialog> element itself.
+    if (ev.target === ev.currentTarget) this._closePopup();
+  }
+
+  /** A tile asked for more-info: step aside so HA's dialog is on top, come back when it closes. */
+  private _onPopupMoreInfo() {
+    this._reopen = this._popup;
+    this._closePopup();
+  }
+
+  protected updated(): void {
+    const dialog = this.renderRoot.querySelector<HTMLDialogElement>("dialog.apc-popup");
+    if (dialog && !dialog.open) {
+      try {
+        dialog.showModal();
+      } catch {
+        dialog.setAttribute("open", "");
+      }
+    }
+  }
+
+  private _bulkActions(group: Group): { label: string; icon: string; service: string }[] {
+    const any = group.active.length > 0;
+    const t = (k: string) => localize(this.hass, k);
+    switch (group.id) {
+      case "lights":
+        return [any
+          ? { label: t("turn_all_off"), icon: "mdi:lightbulb-group-off-outline", service: "light.turn_off" }
+          : { label: t("turn_all_on"), icon: "mdi:lightbulb-group", service: "light.turn_on" }];
+      case "switches":
+        return [any
+          ? { label: t("turn_all_off"), icon: "mdi:power-plug-off-outline", service: "switch.turn_off" }
+          : { label: t("turn_all_on"), icon: "mdi:power-plug-outline", service: "switch.turn_on" }];
+      case "fans":
+        return [any
+          ? { label: t("turn_all_off"), icon: "mdi:fan-off", service: "fan.turn_off" }
+          : { label: t("turn_all_on"), icon: "mdi:fan", service: "fan.turn_on" }];
+      case "covers":
+        return [
+          { label: t("open_all"), icon: "mdi:arrow-up", service: "cover.open_cover" },
+          { label: t("close_all"), icon: "mdi:arrow-down", service: "cover.close_cover" },
+        ];
+      case "media":
+        return any ? [{ label: t("pause_all"), icon: "mdi:pause", service: "media_player.media_pause" }] : [];
+      default:
+        return [];
+    }
+  }
+
+  private _bulk(group: Group, service: string) {
+    this._fireAction(
+      {
+        tap_action: { action: "perform-action", perform_action: service, target: { entity_id: [...group.entities] } },
+      },
+      "tap"
+    );
+  }
+
+  private _renderPopup(group: Group, area: AreaRegistryEntry) {
+    const hass = this.hass!;
+    const meta = GROUP_META[group.id];
+    const active = group.active.length > 0;
+    const title = group.id === "alerts" ? localize(hass, "g_alerts") : localize(hass, `g_${group.id}`);
+    const sub = `${this._config!.name || area.name} · ${localize(hass, "n_of_m_active", {
+      n: group.active.length,
+      m: group.entities.length,
+    })}`;
+    return html`
+      <dialog
+        class="apc-popup"
+        aria-label=${title}
+        style=${styleMap({ "--c": meta.color })}
+        @close=${this._onPopupClosed}
+        @click=${this._onPopupClick}
+        @hass-more-info=${this._onPopupMoreInfo}
+      >
+        <div class="popup-surface">
+          <header class="popup-head">
+            <div class=${classMap({ "popup-icon": true, active })}>
+              <ha-icon .icon=${active ? meta.icon : meta.iconOff}></ha-icon>
+            </div>
+            <div class="popup-titles">
+              <div class="popup-title">${title}</div>
+              <div class="popup-sub">${sub}</div>
+            </div>
+            <button class="popup-close" aria-label=${localize(hass, "close")} @click=${() => this._closePopup()}>
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </header>
+          ${this._bulkActions(group).length
+            ? html`<div class="popup-bulk">
+                ${this._bulkActions(group).map(
+                  (b) => html`<button class="bulk" @click=${() => this._bulk(group, b.service)}>
+                    <ha-icon .icon=${b.icon}></ha-icon>${b.label}
+                  </button>`
+                )}
+              </div>`
+            : nothing}
+          <div class="popup-grid">
+            ${this._tiles === undefined
+              ? nothing
+              : this._tiles === null
+              ? this._sortedEntities(group).map((id) => this._fallbackTile(id, group))
+              : this._tiles}
+          </div>
+        </div>
+      </dialog>
+    `;
+  }
+
+  /** Tile look-alike used when HA's card helpers can't be loaded. */
+  private _fallbackTile(id: string, group: Group) {
+    const hass = this.hass!;
+    const s = hass.states[id];
+    if (!s) return nothing;
+    const active = group.active.includes(id);
+    const rgb = id.startsWith("light.") ? lightColor(s) : undefined;
+    const color = rgb ? `rgb(${rgb.join(",")})` : GROUP_META[group.id].color;
+    const t = Date.parse(s.last_changed);
+    const toggleable = ["light", "switch", "fan", "input_boolean", "cover", "media_player", "lock"].includes(
+      id.split(".")[0]
+    );
+    return html`
+      <div
+        class=${classMap({ "mini-tile": true, active })}
+        style=${styleMap({ "--c": color })}
+        role="button"
+        tabindex="0"
+        ${actionHandler({ hasHold: true })}
+        @apc-action=${(ev: CustomEvent) => {
+          if (ev.detail.action === "hold" || !toggleable) this._moreInfo(id);
+          else this._fireAction({ entity: id, tap_action: { action: "toggle" } }, "tap");
+        }}
+      >
+        <div class="mt-icon"><ha-state-icon .hass=${hass} .stateObj=${s}></ha-state-icon></div>
+        <div class="mt-text">
+          <div class="mt-name">${this._entityName(s)}</div>
+          <div class="mt-state">${this._formatState(s)}${Number.isNaN(t) ? "" : ` · ${this._ago(t)}`}</div>
+        </div>
+      </div>
+    `;
   }
 
   // ---- Formatting ---------------------------------------------------------

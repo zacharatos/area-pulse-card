@@ -79,9 +79,13 @@
   add(st("binary_sensor.living_room_window_left", "on", { friendly_name: "Living Room Window Left", device_class: "window" }, 34), "living_room");
   add(st("binary_sensor.living_room_window_right", "off", { friendly_name: "Living Room Window Right", device_class: "window" }, 300), "living_room");
   add(st("binary_sensor.balcony_door", "off", { friendly_name: "Balcony Door", device_class: "door" }, 90), "living_room");
-  add(st("light.living_room_ceiling", "on", { friendly_name: "Living Room Ceiling" }, 40), "living_room");
-  add(st("light.living_room_floor_lamp", "on", { friendly_name: "Living Room Floor Lamp" }, 40), "living_room");
-  add(st("light.living_room_led_strip", "off", { friendly_name: "Living Room LED Strip" }, 400), "living_room");
+  const glow = new URLSearchParams(location.search).get("rgb");
+  const ceilingRgb = glow ? glow.split(",").map(Number) : [146, 98, 255];
+  add(st("light.living_room_ceiling", "on", { friendly_name: "Living Room Ceiling", rgb_color: ceilingRgb, brightness: 220, supported_color_modes: ["rgb"] }, 40), "living_room");
+  add(st("light.living_room_floor_lamp", "on", { friendly_name: "Living Room Floor Lamp", color_temp_kelvin: 2700, brightness: 150, supported_color_modes: ["color_temp"] }, 40), "living_room");
+  add(st("light.living_room_led_strip", "off", { friendly_name: "Living Room LED Strip", supported_color_modes: ["rgb"] }, 400), "living_room");
+  add(st("switch.living_room_tv_plug", "on", { friendly_name: "Living Room TV Plug", device_class: "outlet" }, 180), "living_room");
+  add(st("switch.living_room_heater_plug", "off", { friendly_name: "Living Room Heater Plug", device_class: "outlet" }, 900), "living_room");
   add(st("media_player.sonos_beam", "playing", { friendly_name: "Sonos Beam", media_title: "Midnight City" }, 8), "living_room");
   add(st("climate.living_room_ac", "heat", { friendly_name: "Living Room AC", hvac_action: "heating", temperature: 23 }, 20), "living_room");
   add(st("cover.living_room_blinds", "closed", { friendly_name: "Living Room Blinds" }, 500), "living_room");
@@ -94,14 +98,15 @@
   add(st("binary_sensor.kitchen_sink_leak", "on", { friendly_name: "Kitchen Sink Leak", device_class: "moisture" }, 2), "kitchen");
   add(st("sensor.kitchen_temperature", "26.1", { friendly_name: "Kitchen Temperature", device_class: "temperature", unit_of_measurement: "°C" }), "kitchen");
   add(st("sensor.kitchen_humidity", "71", { friendly_name: "Kitchen Humidity", device_class: "humidity", unit_of_measurement: "%" }), "kitchen");
-  add(st("light.kitchen", "off", { friendly_name: "Kitchen Lights" }, 47), "kitchen");
+  add(st("light.kitchen", "off", { friendly_name: "Kitchen Lights", supported_color_modes: ["brightness"] }, 47), "kitchen");
   add(st("binary_sensor.kitchen_window", "off", { friendly_name: "Kitchen Window", device_class: "window" }, 600), "kitchen");
 
   // Bedroom: clear, cold, compact.
   add(st("binary_sensor.bedroom_presence", "off", { friendly_name: "Bedroom Presence", device_class: "presence" }, 125), "bedroom");
   add(st("sensor.bedroom_temperature", "18.2", { friendly_name: "Bedroom Temperature", device_class: "temperature", unit_of_measurement: "°C" }), "bedroom");
-  add(st("sensor.bedroom_humidity", "52", { friendly_name: "Bedroom Humidity", device_class: "humidity", unit_of_measurement: "%" }), "bedroom");
-  add(st("light.bedroom", "off", { friendly_name: "Bedroom Light" }, 125), "bedroom");
+  add(st("sensor.bedroom_humidity", "31", { friendly_name: "Bedroom Humidity", device_class: "humidity", unit_of_measurement: "%" }), "bedroom");
+  add(st("light.bedroom", "on", { friendly_name: "Bedroom Light", color_temp_kelvin: 2200, brightness: 90, supported_color_modes: ["color_temp"] }, 15), "bedroom");
+  add(st("sensor.bedroom_humidity_2", "29", { friendly_name: "Bedroom Humidity", device_class: "humidity", unit_of_measurement: "%" }), "hallway");
   add(st("lock.bedroom_balcony", "unlocked", { friendly_name: "Bedroom Balcony Lock" }, 30), "bedroom");
   add(st("cover.bedroom_shutter", "open", { friendly_name: "Bedroom Shutter" }, 400), "bedroom");
 
@@ -119,7 +124,18 @@
     callService: async (...a) => calls.push(a),
     formatEntityState: (s) => ({ on: "On", off: "Off", playing: "Playing", unlocked: "Unlocked", open: "Open", closed: "Closed" })[s.state] ?? s.state,
   };
-  if (new URLSearchParams(location.search).get("dark")) document.body.classList.add("dark");
+  if (new URLSearchParams(location.search).get("dark")) { document.body.classList.add("dark"); window.hass.themes = { darkMode: true }; }
+  // Optional stand-in for HA's card helpers, to exercise the native-tile path.
+  window.tileConfigs = [];
+  if (new URLSearchParams(location.search).get("helpers")) {
+    customElements.define("stub-tile", class extends HTMLElement {
+      set hass(h) { this._h = h; this.draw(); }
+      draw() { if (!this._h || !this.config) return; const s = this._h.states[this.config.entity];
+        this.style.cssText = "display:block;padding:10px 12px;border-radius:12px;border:1px dashed var(--divider-color);font:13px system-ui";
+        this.textContent = `TILE ${this.config.name} — ${s.state}${this.config.features ? " + " + this.config.features.map(f => f.type).join(",") : ""}`; }
+    });
+    window.loadCardHelpers = async () => ({ createCardElement: (c) => { window.tileConfigs.push(c); const el = document.createElement("stub-tile"); el.config = c; return el; } });
+  }
 
   const configs = [
     { type: "custom:area-pulse-card", area: "living_room", sensor_classes: ["carbon_dioxide", "illuminance"],

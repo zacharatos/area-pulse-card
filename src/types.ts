@@ -118,6 +118,7 @@ export type GroupId =
   | "locks"
   | "lights"
   | "fans"
+  | "switches"
   | "media"
   | "climate"
   | "alerts"
@@ -136,7 +137,20 @@ export interface AreaPulseCardConfig {
   humidity_entity?: string;
   sensor_classes?: string[];
   alert_classes?: string[];
+  /** All status chips to show, in order. */
   groups?: GroupId[];
+  /** Chips placed in the first row (default: motion, doors, windows). The rest go in the second row. */
+  top_groups?: GroupId[];
+  /** Light toggled by the area icon and used for the glow colour. Auto-detected when omitted. */
+  main_light?: string;
+  /** Set to false to keep the area icon passive. */
+  link_main_light?: boolean;
+  colors?: {
+    temperature_low?: string;
+    temperature_high?: string;
+    humidity_low?: string;
+    humidity_high?: string;
+  };
   presence_entities?: string[];
   exclude_entities?: string[];
   comfort_temperature?: [number, number] | { min?: number; max?: number };

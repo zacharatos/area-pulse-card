@@ -12,17 +12,21 @@ export const DEFAULT_ALERT_CLASSES = [
 
 export const DEFAULT_GROUPS: GroupId[] = [
   "alerts",
-  "presence",
+  "motion",
   "doors",
   "windows",
+  "climate",
+  "lights",
+  "switches",
+  "fans",
   "covers",
   "locks",
-  "lights",
-  "fans",
   "media",
-  "climate",
   "batteries",
 ];
+
+/** Chips shown in the first row: what is open / moving in the room. Everything else goes in row two. */
+export const DEFAULT_TOP_GROUPS: GroupId[] = ["motion", "doors", "windows"];
 
 export const SENSOR_CLASS_OPTIONS = [
   "illuminance",
@@ -127,7 +131,7 @@ export function buildGroups(
       ["on", "home", "detected"].includes(s.state)
     )
   );
-  if (presenceIds.length) add(makeGroup(hass, "motion", motionIds, (s) => s.state === "on"));
+  add(makeGroup(hass, "motion", motionIds, (s) => s.state === "on"));
 
   add(makeGroup(hass, "doors", binaryClasses(hass, ids, ["door", "garage_door", "opening"]), (s) => s.state === "on"));
   add(makeGroup(hass, "windows", binaryClasses(hass, ids, ["window"]), (s) => s.state === "on"));
@@ -135,6 +139,8 @@ export function buildGroups(
   add(makeGroup(hass, "locks", byDomain("lock"), (s) => ["unlocked", "open", "opening", "jammed"].includes(s.state)));
   add(makeGroup(hass, "lights", byDomain("light"), (s) => s.state === "on"));
   add(makeGroup(hass, "fans", byDomain("fan"), (s) => s.state === "on"));
+  // Smart plugs and relays. Switches that duplicate a light (wall relays exposed as both) are usually hidden in HA.
+  add(makeGroup(hass, "switches", byDomain("switch"), (s) => s.state === "on"));
   add(makeGroup(hass, "media", byDomain("media_player"), (s) => s.state === "playing"));
   add(
     makeGroup(hass, "climate", byDomain("climate"), (s) =>
@@ -218,9 +224,63 @@ export function watchedEntities(
   index: AreaIndex
 ): Set<string> {
   const set = new Set(index.withDiagnostic);
-  for (const e of [config.temperature_entity, config.humidity_entity, ...(config.presence_entities ?? [])]) {
+  for (const e of [config.temperature_entity, config.humidity_entity, config.main_light, ...(config.presence_entities ?? [])]) {
     if (e) set.add(e);
   }
   for (const a of config.actions ?? []) if (a.entity) set.add(a.entity);
   return set;
+}
+
+const MAIN_LIGHT_HINT = /ceiling|main|overhead|central|chandelier|κεντρικ|ταβάν|οροφ/i;
+
+/**
+ * The light the area icon toggles: explicit config > a light whose name suggests it is the main one >
+ * the only light in the area. Returns undefined when the choice would be a guess.
+ */
+export function findMainLight(
+  hass: HomeAssistant,
+  config: AreaPulseCardConfig,
+  index: AreaIndex
+): string | undefined {
+  if (config.link_main_light === false) return undefined;
+  if (config.main_light) return hass.states[config.main_light] ? config.main_light : undefined;
+  const lights = index.primary.filter((id) => domainOf(id) === "light");
+  if (lights.length === 1) return lights[0];
+  return lights.find((id) =>
+    MAIN_LIGHT_HINT.test(`${id} ${hass.states[id]?.attributes.friendly_name ?? ""}`)
+  );
+}
+
+/** Colour a light is emitting, as [r, g, b], or undefined when it is off or reports no colour. */
+export function lightColor(s?: HassEntity): [number, number, number] | undefined {
+  if (!s || s.state !== "on") return undefined;
+  const rgb = s.attributes.rgb_color as number[] | undefined;
+  if (Array.isArray(rgb) && rgb.length === 3) return [rgb[0], rgb[1], rgb[2]];
+  const k = s.attributes.color_temp_kelvin as number | undefined;
+  if (typeof k === "number") return kelvinToRgb(k);
+  const hs = s.attributes.hs_color as number[] | undefined;
+  if (Array.isArray(hs) && hs.length === 2) return hsToRgb(hs[0], hs[1]);
+  return undefined;
+}
+
+function clamp(v: number) {
+  return Math.max(0, Math.min(255, Math.round(v)));
+}
+
+/** Tanner Helland's approximation, good enough for a background tint. */
+export function kelvinToRgb(kelvin: number): [number, number, number] {
+  const t = kelvin / 100;
+  const r = t <= 66 ? 255 : 329.698727446 * Math.pow(t - 60, -0.1332047592);
+  const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  return [clamp(r), clamp(g), clamp(b)];
+}
+
+function hsToRgb(h: number, sPct: number): [number, number, number] {
+  const s = sPct / 100;
+  const f = (n: number) => {
+    const k = (n + h / 60) % 6;
+    return 255 * (1 - s * Math.max(0, Math.min(k, 4 - k, 1)));
+  };
+  return [clamp(f(5)), clamp(f(3)), clamp(f(1))];
 }

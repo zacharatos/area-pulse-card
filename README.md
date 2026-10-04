@@ -8,17 +8,20 @@ It is built to sit next to the built-in Tile and Area cards without looking out 
 
 ![Light theme](docs/light.png)
 ![Dark theme](docs/dark.png)
+![Group popup](docs/popup.png)
 
 ## Features
 
 - **Zero config** — select an area; entities are discovered from the entity and device registries (device → area inheritance included, hidden and config entities skipped).
 - **Presence first** — occupancy/presence sensors (mmWave etc.) drive an "Occupied for 12 min / Clear for 2 h" line and a live presence dot; falls back to motion sensors when the room has no presence sensor.
-- **Climate at a glance** — uses the area's own temperature/humidity sensor setting when present, otherwise the median of all sensors (same rule as the core area card). Values turn blue/orange outside a configurable comfort band.
-- **Status chips** — doors, windows, covers, locks, lights, fans, media (shows the track title), climate (heating/cooling + target), low batteries. Tap a chip with one entity for more-info, or with several to open an inline list with each entity's state and "since" time.
+- **Main light on the area icon** — tap the icon to toggle the room's main light, hold for its dialog. The icon and the ambient glow take the light's actual colour (RGB, colour temperature or hue/saturation) and the glow scales with brightness. Auto-detected (the only light, or one named ceiling/main/κεντρικό…), or set `main_light`.
+- **Climate at a glance** — uses the area's own temperature/humidity sensor setting when present, otherwise the median of all sensors (same rule as the core area card). Outside the comfort band, temperature turns blue (cold) or red (warm) and humidity white (dry) or blue (humid). On light themes "dry" uses a pale blue-grey, because white text is invisible on a white card. All four colours are configurable.
+- **Two rows of status chips** — first row: motion, doors, windows (what's open or moving); second row: everything else — heating/cooling, lights, smart plugs and switches, fans, covers, locks, media (shows the track title), low batteries and extra readings. Which groups go in the first row is configurable.
+- **Group popup** — tapping a chip that covers several entities (e.g. "2 lights on") opens a popup with a native Home Assistant tile per entity, brightness slider included for dimmable lights, plus an "All off / All on" (or open/close all, pause all) button. Opening an entity's dialog from the popup steps it aside and brings it back when you close the dialog. On phones the popup is a bottom sheet. A chip with a single entity opens its more-info dialog directly.
 - **Safety alerts** — moisture, smoke, gas, CO, safety, problem, tamper: red banner and red card outline as soon as one trips.
 - **Extra readings** — optional CO₂ (colour-coded at 1000/1500 ppm), PM2.5, VOC, illuminance, pressure, power (summed), energy, noise.
 - **Quick actions** — presets or any entity / any HA action, with tap, hold and double-tap.
-- **Ambient cues** — warm glow when lights are on, optional area picture blended into the background.
+- **Ambient cues** — light-coloured glow while lights are on, optional area picture blended into the background.
 - **Sections-ready** — `getGridOptions` for the sections view, container queries for narrow columns, a `compact` layout.
 - **Visual editor** — built on HA's own `ha-form` selectors; YAML optional.
 - **Localised** — English and Greek; numbers, units and relative times use your HA locale.
@@ -58,11 +61,18 @@ color: light-blue            # HA colour token or any CSS colour
 layout: default              # default | compact
 show_picture: true
 show_inactive: false         # also show "Windows closed", "Lights off", ...
+main_light: light.living_room_ceiling   # optional; auto-detected
+colors:
+  temperature_low: blue
+  temperature_high: red
+  humidity_low: white
+  humidity_high: blue
 temperature_entity: sensor.living_room_temperature
 comfort_temperature: { min: 20, max: 24 }
 comfort_humidity: { min: 40, max: 60 }
 sensor_classes: [carbon_dioxide, illuminance]
-groups: [alerts, doors, windows, lights, media, climate, batteries]
+groups: [alerts, motion, doors, windows, climate, lights, switches, media, batteries]
+top_groups: [motion, doors, windows]
 exclude_entities: [binary_sensor.living_room_tv_motion]
 battery_threshold: 20
 tap_action:
@@ -88,10 +98,14 @@ actions:
 | `layout` | `default` \| `compact` | `default` | Compact shrinks everything and uses icon-only inactive chips and actions. |
 | `show_picture` | bool | `true` | Blend the area picture into the card background. |
 | `show_inactive` | bool | `false` | Show groups with nothing active ("Doors closed"). |
+| `main_light` | entity | auto | Light the area icon toggles and whose colour tints the icon and glow. |
+| `link_main_light` | bool | `true` | Set `false` to keep the area icon passive. |
+| `colors` | map | see below | `temperature_low` (blue), `temperature_high` (red), `humidity_low` (white; pale blue-grey on light themes), `humidity_high` (blue). HA colour tokens or CSS colours. |
 | `temperature_entity` / `humidity_entity` | entity | area setting → median | Explicit climate sensors. |
 | `comfort_temperature` / `comfort_humidity` | `{min,max}` or `[min,max]` | `19–25 °C` (`68–76 °F`) / `35–65 %` | Comfort band used for colouring. |
 | `sensor_classes` | list | `[]` | Extra readings: `illuminance`, `carbon_dioxide`, `pm25`, `volatile_organic_compounds`, `pressure`, `power`, `energy`, `sound_pressure`. |
-| `groups` | list | all | Which status chips to show, in order: `alerts`, `motion`, `doors`, `windows`, `covers`, `locks`, `lights`, `fans`, `media`, `climate`, `batteries`. |
+| `groups` | list | all | Which status chips to show, in order: `alerts`, `motion`, `doors`, `windows`, `climate`, `lights`, `switches`, `fans`, `covers`, `locks`, `media`, `batteries`. |
+| `top_groups` | list | `motion, doors, windows` | Groups placed in the first chip row; every other group goes in the second row. |
 | `alert_classes` | list | `moisture, smoke, gas, carbon_monoxide, safety, problem, tamper` | Binary-sensor device classes treated as alerts. |
 | `presence_entities` | list | auto | Force which entities define presence (e.g. a template or `input_boolean`). |
 | `exclude_entities` | list | `[]` | Ignore these entities everywhere. |
@@ -133,7 +147,7 @@ npm run watch        # rebuild on change
 python3 -m http.server 8765   # then open http://localhost:8765/test/harness.html (?dark=1, ?lang=el)
 ```
 
-`test/harness.html` renders the card against a mock `hass` object with stubbed `ha-card`/`ha-icon`, which is how the screenshots above were made. To release, bump the version, tag `vX.Y.Z` and push — the release workflow builds and attaches the bundle.
+`test/harness.html` renders the card against a mock `hass` object with stubbed `ha-card`/`ha-icon`, which is how the screenshots above were made. Add `?helpers=1` to stub HA's card helpers and exercise the native-tile popup path, or `?rgb=255,120,40` to change the main light's colour. To release, bump the version, tag `vX.Y.Z` and push — the release workflow builds and attaches the bundle.
 
 ## License
 

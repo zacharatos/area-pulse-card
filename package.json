@@ -1,6 +1,6 @@
 {
   "name": "area-pulse-card",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A modern, area-aware Lovelace card for Home Assistant: presence, climate, openings, alerts and quick actions at a glance.",
   "main": "dist/area-pulse-card.js",
   "type": "module",
