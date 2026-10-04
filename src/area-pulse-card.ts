@@ -28,6 +28,15 @@ import {
 } from "./discovery";
 import { hasLabelFilter, loadLabelRegistry, resolveLabelFilter, type ResolvedLabelFilter } from "./labels";
 import { cssColor, resolveAction, type ResolvedAction } from "./presets";
+import {
+  buildRoom,
+  isActiveState,
+  matchesQuery,
+  roomLabels,
+  type RoomLabel,
+  type RoomModel,
+  type RoomSection,
+} from "./room";
 import { actionHandler, type ActionKind } from "./action-handler";
 import { localize } from "./localize";
 import { cardStyles } from "./styles";
@@ -35,6 +44,10 @@ import { popupStyles } from "./popup-styles";
 import "./editor";
 
 const VERSION = "1.1.0";
+
+interface CardHelpers {
+  createCardElement: (config: Record<string, unknown>) => HTMLElement | Promise<HTMLElement>;
+}
 
 interface GroupMeta {
   icon: string;
@@ -96,14 +109,28 @@ export class AreaPulseCard extends LitElement {
   /** Native tile cards for the popup; null means HA's card helpers are unavailable and fallback tiles are drawn. */
   @state() private _tiles?: HTMLElement[] | null;
   /** Popup to restore after a more-info dialog opened from it is closed. */
-  private _reopen?: GroupId;
+  private _reopen?: GroupId | "room";
   private _onDialogClosed = () => {
     if (this._reopen) {
       const id = this._reopen;
       this._reopen = undefined;
-      this._openPopup(id);
+      if (id === "room") this._openRoom(true);
+      else this._openPopup(id);
     }
   };
+
+  /** Room popup: the layout is decided when it opens so rows never move while you use them. */
+  @state() private _room = false;
+  private _roomModel?: RoomModel;
+  private _roomLabels: Record<string, RoomLabel> = {};
+  /** Native tiles of the room popup, created lazily; null means HA's card helpers are unavailable. */
+  @state() private _roomTiles?: Map<string, HTMLElement> | null;
+  @state() private _roomUi: { query: string; collapsed: Set<string>; expanded: Set<string> } = {
+    query: "",
+    collapsed: new Set(),
+    expanded: new Set(),
+  };
+  private _roomScroll = 0;
 
   /** Label registry, needed only to resolve label names in `label_filter` to IDs. */
   @state() private _labelRegistry?: LabelRegistryEntry[];
@@ -137,6 +164,7 @@ export class AreaPulseCard extends LitElement {
     this._config = { ...config };
     this.layout = config.layout === "compact" ? "compact" : "default";
     this._popup = undefined;
+    this._room = false;
     this._indexDeps = [];
   }
 
@@ -166,11 +194,15 @@ export class AreaPulseCard extends LitElement {
 
   protected shouldUpdate(changed: PropertyValues): boolean {
     if (!this._config) return false;
+    // Popup tiles are real cards: keep them live even when nothing on this card changed.
+    if (changed.has("hass") && this.hass) {
+      const hass = this.hass;
+      for (const t of this._tiles ?? []) (t as unknown as { hass: HomeAssistant }).hass = hass;
+      for (const t of this._roomTiles?.values() ?? []) (t as unknown as { hass: HomeAssistant }).hass = hass;
+    }
     if (!changed.has("hass") || changed.size > 1) return true;
     const old = changed.get("hass") as HomeAssistant | undefined;
     const hass = this.hass;
-    // Popup tiles are real cards: keep them live even when nothing on this card changed.
-    if (hass && this._tiles) for (const t of this._tiles) (t as unknown as { hass: HomeAssistant }).hass = hass;
     if (!old || !hass) return true;
     if (
       old.entities !== hass.entities ||
@@ -251,7 +283,9 @@ export class AreaPulseCard extends LitElement {
     const alerts = groups.alerts?.active ?? [];
     const accent = config.color ? cssColor(config.color) : undefined;
     const showPicture = config.show_picture !== false && !!area.picture;
-    const headerHasAction = this._hasAction(config.tap_action) || this._hasAction(config.hold_action);
+    const roomEnabled = this._roomEnabled(index);
+    const headerHasAction =
+      this._hasAction(config.tap_action) || this._hasAction(config.hold_action) || (roomEnabled && !config.tap_action);
 
     // Main light drives the icon and the ambient glow colour.
     const mainLight = findMainLight(hass, config, index);
@@ -334,6 +368,7 @@ export class AreaPulseCard extends LitElement {
         </div>
       </ha-card>
       ${this._popup && groups[this._popup] ? this._renderPopup(groups[this._popup]!, area) : nothing}
+      ${this._room ? this._renderRoom(area, groups, temperature, humidity) : nothing}
     `;
   }
 
@@ -602,6 +637,11 @@ export class AreaPulseCard extends LitElement {
 
   private _cardAction(action: ActionKind) {
     const c = this._config!;
+    // No tap action configured: the card's own room popup is the default.
+    if (action === "tap" && !c.tap_action && this._roomEnabled(this._getIndex())) {
+      this._openRoom();
+      return;
+    }
     this._fireAction(
       { tap_action: c.tap_action, hold_action: c.hold_action, double_tap_action: c.double_tap_action },
       action
@@ -630,7 +670,7 @@ export class AreaPulseCard extends LitElement {
   private _moreInfo(entityId?: string, ev?: Event) {
     ev?.stopPropagation();
     if (!entityId) return;
-    if (this._popup) this._onPopupMoreInfo();
+    if (this._popup || this._room) this._onPopupMoreInfo();
     this.dispatchEvent(
       new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId } })
     );
@@ -651,17 +691,24 @@ export class AreaPulseCard extends LitElement {
     );
   }
 
+  private _helpers?: CardHelpers;
+
+  /** HA's card helpers (for native tiles); undefined when they are not available. */
+  private async _loadHelpers(): Promise<CardHelpers | undefined> {
+    try {
+      return (await (window as unknown as { loadCardHelpers?: () => Promise<CardHelpers> }).loadCardHelpers?.()) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async _openPopup(id: GroupId) {
     const group = this._currentGroups()[id];
     if (!group) return;
     this._popup = id;
+    this._room = false;
     this._tiles = undefined;
-    let helpers: { createCardElement: (c: Record<string, unknown>) => HTMLElement | Promise<HTMLElement> } | undefined;
-    try {
-      helpers = await (window as unknown as { loadCardHelpers?: () => Promise<typeof helpers> }).loadCardHelpers?.();
-    } catch {
-      helpers = undefined;
-    }
+    const helpers = await this._loadHelpers();
     if (this._popup !== id) return;
     if (!helpers) {
       this._tiles = null;
@@ -669,7 +716,7 @@ export class AreaPulseCard extends LitElement {
     }
     const tiles = await Promise.all(
       this._sortedEntities(group).map(async (entity) => {
-        const el = await helpers!.createCardElement(this._tileConfig(entity));
+        const el = await helpers.createCardElement(this._tileConfig(entity));
         (el as unknown as { hass?: HomeAssistant }).hass = this.hass;
         return el;
       })
@@ -678,7 +725,7 @@ export class AreaPulseCard extends LitElement {
   }
 
   /** Native tile card config, with the control feature that makes sense for the domain. */
-  private _tileConfig(entity: string): Record<string, unknown> {
+  private _tileConfig(entity: string, name?: string): Record<string, unknown> {
     const s = this.hass!.states[entity];
     const domain = entity.split(".")[0];
     const features: Record<string, unknown>[] = [];
@@ -689,12 +736,18 @@ export class AreaPulseCard extends LitElement {
       features.push({ type: "cover-open-close" });
     } else if (domain === "climate") {
       features.push({ type: "target-temperature" });
+    } else if (domain === "media_player") {
+      features.push({ type: "media-player-playback" });
     }
     return {
       type: "tile",
       entity,
-      name: this._entityName(s),
-      ...(features.length ? { features, features_position: "bottom" } : {}),
+      name: name ?? this._entityName(s),
+      // Inline keeps a light one row tall (slider beside the name) on Home Assistant versions that support
+      // it; older ones ignore the key and draw the slider below.
+      ...(features.length
+        ? { features, features_position: domain === "light" || domain === "climate" ? "inline" : "bottom" }
+        : {}),
     };
   }
 
@@ -705,6 +758,9 @@ export class AreaPulseCard extends LitElement {
   private _onPopupClosed() {
     this._popup = undefined;
     this._tiles = undefined;
+    this._room = false;
+    this._roomTiles = undefined;
+    this._roomModel = undefined;
   }
 
   private _onPopupClick(ev: MouseEvent) {
@@ -714,7 +770,12 @@ export class AreaPulseCard extends LitElement {
 
   /** A tile asked for more-info: step aside so HA's dialog is on top, come back when it closes. */
   private _onPopupMoreInfo() {
-    this._reopen = this._popup;
+    if (this._room) {
+      this._roomScroll = this.renderRoot.querySelector<HTMLElement>(".room-body")?.scrollTop ?? 0;
+      this._reopen = "room";
+    } else {
+      this._reopen = this._popup;
+    }
     this._closePopup();
   }
 
@@ -725,6 +786,11 @@ export class AreaPulseCard extends LitElement {
         dialog.showModal();
       } catch {
         dialog.setAttribute("open", "");
+      }
+      if (this._room && this._roomScroll) {
+        const body = dialog.querySelector<HTMLElement>(".room-body");
+        if (body) body.scrollTop = this._roomScroll;
+        this._roomScroll = 0;
       }
     }
   }
@@ -818,21 +884,26 @@ export class AreaPulseCard extends LitElement {
     `;
   }
 
-  /** Tile look-alike used when HA's card helpers can't be loaded. */
+  /** Tile look-alike used when HA's card helpers can't be loaded, and for compact status rows. */
   private _fallbackTile(id: string, group: Group) {
+    return this._miniTile(id, { color: GROUP_META[group.id].color, active: group.active.includes(id) });
+  }
+
+  private _miniTile(id: string, opts: { color: string; active: boolean; name?: string; sub?: string }) {
     const hass = this.hass!;
     const s = hass.states[id];
     if (!s) return nothing;
-    const active = group.active.includes(id);
     const rgb = id.startsWith("light.") ? lightColor(s) : undefined;
-    const color = rgb ? `rgb(${rgb.join(",")})` : GROUP_META[group.id].color;
+    const color = rgb ? `rgb(${rgb.join(",")})` : opts.color;
     const t = Date.parse(s.last_changed);
     const toggleable = ["light", "switch", "fan", "input_boolean", "cover", "media_player", "lock"].includes(
       id.split(".")[0]
     );
+    const stateLine =
+      opts.sub ?? `${this._formatState(s)}${Number.isNaN(t) ? "" : ` · ${this._ago(t)}`}`;
     return html`
       <div
-        class=${classMap({ "mini-tile": true, active })}
+        class=${classMap({ "mini-tile": true, active: opts.active })}
         style=${styleMap({ "--c": color })}
         role="button"
         tabindex="0"
@@ -844,10 +915,340 @@ export class AreaPulseCard extends LitElement {
       >
         <div class="mt-icon"><ha-state-icon .hass=${hass} .stateObj=${s}></ha-state-icon></div>
         <div class="mt-text">
-          <div class="mt-name">${this._entityName(s)}</div>
-          <div class="mt-state">${this._formatState(s)}${Number.isNaN(t) ? "" : ` · ${this._ago(t)}`}</div>
+          <div class="mt-name" title=${this._entityName(s)}>${opts.name ?? this._entityName(s)}</div>
+          <div class="mt-state">${stateLine}</div>
         </div>
       </div>
+    `;
+  }
+
+  // ---- Room popup ---------------------------------------------------------
+
+  private _roomEnabled(index: AreaIndex): boolean {
+    return this._config?.room_popup !== false && index.primary.length > 0;
+  }
+
+  private async _openRoom(restore = false) {
+    const { hass, _config: config } = this;
+    if (!hass || !config) return;
+    if (!restore) this._roomUi = { query: "", collapsed: new Set(), expanded: new Set() };
+    const model = buildRoom(hass, config, this._getIndex());
+    const ids = (kind: RoomSection["kind"]) => model.sections.filter((x) => x.kind === kind).flatMap((x) => x.entities);
+    this._roomModel = model;
+    this._roomLabels = roomLabels(hass, config.area, ids("stats"), [...ids("tiles"), ...ids("status")]);
+    this._popup = undefined;
+    this._tiles = undefined;
+    this._roomTiles = undefined;
+    this._room = true;
+
+    this._helpers = await this._loadHelpers();
+    if (!this._room || this._roomModel !== model) return;
+    if (!this._helpers) {
+      this._roomTiles = null;
+      return;
+    }
+    this._roomTiles = new Map();
+    await this._ensureRoomTiles();
+  }
+
+  private _roomName(id: string): string {
+    return this._roomLabels[id]?.name ?? this._entityName(this.hass?.states[id]);
+  }
+
+  private _roomMatches(id: string): boolean {
+    const q = this._roomUi.query;
+    if (!q.trim()) return true;
+    const s = this.hass?.states[id];
+    return matchesQuery(q, this._roomName(id), s?.attributes.friendly_name as string | undefined, id, this._roomLabels[id]?.sub);
+  }
+
+  /** How many rows a section shows before "Show N more". */
+  private static readonly ROOM_LIMIT = 8;
+
+  private _roomVisible(sec: RoomSection): string[] {
+    if (this._roomUi.query.trim()) return sec.entities.filter((id) => this._roomMatches(id));
+    if (this._roomUi.expanded.has(sec.id)) return sec.entities;
+    return sec.entities.slice(0, AreaPulseCard.ROOM_LIMIT);
+  }
+
+  /** Create the native tiles that are on screen and do not exist yet. Hundreds of entities stay cheap. */
+  private async _ensureRoomTiles() {
+    const tiles = this._roomTiles;
+    const helpers = this._helpers;
+    if (!tiles || !helpers || !this._roomModel || !this.hass) return;
+    const searching = !!this._roomUi.query.trim();
+    const need: string[] = [];
+    for (const sec of this._roomModel.sections) {
+      if (sec.kind !== "tiles" || (!searching && this._roomUi.collapsed.has(sec.id))) continue;
+      for (const id of this._roomVisible(sec)) if (!tiles.has(id)) need.push(id);
+    }
+    if (!need.length) return;
+    const created = await Promise.all(
+      need.map(async (id) => {
+        const el = await helpers.createCardElement(this._tileConfig(id, this._roomName(id)));
+        (el as unknown as { hass?: HomeAssistant }).hass = this.hass;
+        return [id, el] as const;
+      })
+    );
+    if (this._roomTiles !== tiles) return; // closed or reopened meanwhile
+    for (const [id, el] of created) if (!tiles.has(id)) tiles.set(id, el);
+    this.requestUpdate();
+  }
+
+  private _updateRoomUi(patch: Partial<AreaPulseCard["_roomUi"]>) {
+    this._roomUi = { ...this._roomUi, ...patch };
+    void this._ensureRoomTiles();
+  }
+
+  private _toggleIn(set: Set<string>, id: string): Set<string> {
+    const next = new Set(set);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  }
+
+  private _sectionMeta(id: RoomSection["id"]): { icon: string; color: string; title: string } {
+    const t = (k: string) => localize(this.hass, k);
+    switch (id) {
+      case "attention":
+        return { icon: "mdi:alert-circle-outline", color: "var(--apc-red)", title: t("room_attention") };
+      case "status":
+        return { icon: "mdi:motion-sensor", color: "var(--apc-green)", title: t("room_status") };
+      case "sensors":
+        return { icon: "mdi:gauge", color: "var(--apc-blue)", title: t("room_sensors") };
+      case "other":
+        return { icon: "mdi:dots-grid", color: "var(--apc-accent)", title: t("room_other") };
+      default: {
+        const meta = GROUP_META[id as GroupId];
+        return { icon: meta.icon, color: meta.color, title: t(`g_${id}`) };
+      }
+    }
+  }
+
+  private _statusColor(id: string, reason?: string): string {
+    if (reason === "alert") return "var(--apc-red)";
+    if (reason === "battery") return "var(--apc-orange)";
+    if (reason === "unavailable") return "var(--secondary-text-color)";
+    switch (this.hass?.states[id]?.attributes.device_class) {
+      case "motion":
+      case "occupancy":
+      case "presence":
+        return "var(--apc-green)";
+      case "door":
+      case "garage_door":
+      case "window":
+      case "opening":
+        return "var(--apc-orange)";
+      default:
+        return "var(--apc-accent)";
+    }
+  }
+
+  private _renderRoom(
+    area: AreaRegistryEntry,
+    groups: Partial<Record<GroupId, Group>>,
+    temperature?: Reading,
+    humidity?: Reading
+  ) {
+    const hass = this.hass!;
+    const config = this._config!;
+    const model = this._roomModel;
+    if (!model) return nothing;
+    const ui = this._roomUi;
+    const searching = !!ui.query.trim();
+    const name = config.name || area.name;
+
+    const mainLight = findMainLight(hass, config, this._getIndex());
+    const rgb = mainLight ? lightColor(hass.states[mainLight]) : undefined;
+    const sections = model.sections.map((sec) => this._renderRoomSection(sec, groups)).filter((x) => x !== nothing);
+
+    return html`
+      <dialog
+        class="apc-popup room"
+        aria-label=${name}
+        style=${styleMap(rgb ? { "--room-rgb": rgb.join(",") } : {})}
+        @close=${this._onPopupClosed}
+        @click=${this._onPopupClick}
+        @hass-more-info=${this._onPopupMoreInfo}
+      >
+        <div class="popup-surface room-surface">
+          <div class="sheet-handle" aria-hidden="true"></div>
+          <header class="room-head">
+            <div class=${classMap({ "room-icon": true, "light-on": !!rgb })}>
+              <ha-icon .icon=${config.icon || area.icon || DEFAULT_ICON}></ha-icon>
+            </div>
+            <div class="popup-titles">
+              <div class="popup-title">${name}</div>
+              <div class="popup-sub">${this._secondary(groups)}</div>
+            </div>
+            ${this._renderClimate(temperature, humidity)}
+            <button class="popup-close" aria-label=${localize(hass, "close")} @click=${() => this._closePopup()}>
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </header>
+          ${model.total > 12
+            ? html`<div class="room-search">
+                <ha-icon icon="mdi:magnify"></ha-icon>
+                <input
+                  type="search"
+                  enterkeyhint="search"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder=${localize(hass, "room_search")}
+                  aria-label=${localize(hass, "room_search")}
+                  .value=${ui.query}
+                  @input=${(ev: Event) => this._updateRoomUi({ query: (ev.target as HTMLInputElement).value })}
+                />
+                ${searching
+                  ? html`<button
+                      class="search-clear"
+                      aria-label=${localize(hass, "room_clear_search")}
+                      @click=${() => this._updateRoomUi({ query: "" })}
+                    >
+                      <ha-icon icon="mdi:close-circle"></ha-icon>
+                    </button>`
+                  : nothing}
+              </div>`
+            : nothing}
+          <div class="room-body">
+            ${sections.length
+              ? sections
+              : html`<div class="room-empty">
+                  ${searching
+                    ? localize(hass, "room_no_results", { q: ui.query.trim() })
+                    : localize(hass, "room_empty")}
+                </div>`}
+          </div>
+        </div>
+      </dialog>
+    `;
+  }
+
+  private _renderRoomSection(sec: RoomSection, groups: Partial<Record<GroupId, Group>>) {
+    const hass = this.hass!;
+    const ui = this._roomUi;
+    const searching = !!ui.query.trim();
+    const visible = this._roomVisible(sec);
+    if (searching && !visible.length) return nothing;
+
+    const meta = this._sectionMeta(sec.id);
+    const collapsed = !searching && ui.collapsed.has(sec.id);
+    const total = sec.entities.length;
+    const activeN = sec.entities.filter((id) => isActiveState(hass.states[id])).length;
+    const count = searching
+      ? String(visible.length)
+      : sec.kind === "tiles" || sec.kind === "status"
+        ? sec.id !== "attention" && activeN > 0
+          ? localize(hass, "n_of_m_active", { n: activeN, m: total })
+          : String(total)
+        : String(total);
+    const group = groups[sec.id as GroupId];
+    const bulk = group && sec.kind === "tiles" && !collapsed ? this._bulkActions(group) : [];
+    const overflow = total > AreaPulseCard.ROOM_LIMIT && !searching;
+    const expanded = ui.expanded.has(sec.id);
+
+    return html`
+      <section class="room-sec" style=${styleMap({ "--c": meta.color })} data-section=${sec.id}>
+        <div class="sec-head">
+          <button
+            class="sec-toggle"
+            aria-expanded=${String(!collapsed)}
+            @click=${() => this._updateRoomUi({ collapsed: this._toggleIn(ui.collapsed, sec.id) })}
+          >
+            <ha-icon class="sec-icon" .icon=${meta.icon}></ha-icon>
+            <span class="sec-title">${meta.title}</span>
+            <span class="sec-count">${count}</span>
+            <ha-icon class="sec-chevron" .icon=${collapsed ? "mdi:chevron-down" : "mdi:chevron-up"}></ha-icon>
+          </button>
+          ${bulk.map(
+            (b) => html`<button class="bulk small" @click=${() => this._bulk(group!, b.service)}>
+              <ha-icon .icon=${b.icon}></ha-icon>${b.label}
+            </button>`
+          )}
+        </div>
+        ${collapsed
+          ? nothing
+          : html`<div class=${`sec-grid ${sec.kind}`}>${visible.map((id) => this._renderRoomItem(sec, id))}</div>
+              ${overflow
+                ? html`<button
+                    class="sec-more"
+                    @click=${() => this._updateRoomUi({ expanded: this._toggleIn(ui.expanded, sec.id) })}
+                  >
+                    ${expanded
+                      ? localize(hass, "room_show_less")
+                      : localize(hass, "room_show_more", { n: total - AreaPulseCard.ROOM_LIMIT })}
+                  </button>`
+                : nothing}`}
+      </section>
+    `;
+  }
+
+  private _renderRoomItem(sec: RoomSection, id: string) {
+    const hass = this.hass!;
+    const s = hass.states[id];
+    if (!s) return nothing;
+    const name = this._roomName(id);
+
+    if (sec.kind === "stats") return this._statCell(id);
+
+    if (sec.kind === "status") {
+      const reason = sec.reasons?.[id];
+      let sub: string | undefined;
+      if (reason === "battery") sub = `${localize(hass, "reason_low_battery")} · ${this._formatState(s)}`;
+      else if (reason === "unavailable") sub = localize(hass, "reason_unavailable");
+      return this._miniTile(id, {
+        color: this._statusColor(id, reason),
+        active: reason ? reason !== "unavailable" : isActiveState(s),
+        name,
+        sub,
+      });
+    }
+
+    // Controls: native tile when HA's helpers are there, look-alike otherwise.
+    const tiles = this._roomTiles;
+    const tile = tiles?.get(id);
+    if (tile) return tile;
+    if (tiles === null) {
+      const meta = GROUP_META[sec.id as GroupId];
+      return this._miniTile(id, { color: meta?.color ?? "var(--apc-accent)", active: isActiveState(s), name });
+    }
+    return html`<div class="tile-skel" aria-hidden="true"></div>`;
+  }
+
+  /** Dense read-only cell for a sensor: the value is the point, the name is the caption. */
+  private _statCell(id: string) {
+    const hass = this.hass!;
+    const s = hass.states[id];
+    const label = this._roomLabels[id] ?? { name: this._entityName(s) };
+    const config = this._config!;
+    const value = Number(s.state);
+    const numeric = s.state.trim() !== "" && !Number.isNaN(value);
+    const dc = s.attributes.device_class as string | undefined;
+    let tone = "";
+    if (numeric && dc === "temperature") {
+      const unit = String(s.attributes.unit_of_measurement ?? "");
+      const c = comfortState(value, config.comfort_temperature, unit.includes("F") ? [68, 76] : [19, 25]);
+      tone = c === "ok" ? "" : `t-${c}`;
+    } else if (numeric && dc === "humidity") {
+      const c = comfortState(value, config.comfort_humidity, [35, 65]);
+      tone = c === "ok" ? "" : `h-${c}`;
+    } else if (numeric && dc === "carbon_dioxide") {
+      tone = value >= 1500 ? "bad" : value >= 1000 ? "warn" : "";
+    } else if (numeric && dc === "pm25") {
+      tone = value >= 35 ? "bad" : value >= 12 ? "warn" : "";
+    }
+    return html`
+      <button
+        class=${classMap({ "stat-cell": true, [tone]: !!tone })}
+        title=${(s.attributes.friendly_name as string | undefined) ?? id}
+        @click=${() => this._moreInfo(id)}
+      >
+        <span class="sc-label">
+          <ha-state-icon .hass=${hass} .stateObj=${s}></ha-state-icon>
+          <span class="sc-name">${label.name}</span>
+        </span>
+        <span class="sc-value">${this._formatState(s)}</span>
+        ${label.sub ? html`<span class="sc-sub">${label.sub}</span>` : nothing}
+      </button>
     `;
   }
 

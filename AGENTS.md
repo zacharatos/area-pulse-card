@@ -50,8 +50,9 @@ Don't write a commit message unless he asks for one. If he does, offer it as a s
 
 | File | What lives there |
 | --- | --- |
-| `src/area-pulse-card.ts` | The card element: `setConfig`, `getStubConfig`, `getConfigElement`, `getGridOptions`, `willUpdate` (caches the area index), `render`, the chips, the header, the quick actions, the group popup, the main-light icon and glow. Registers the card in `window.customCards`. Holds `VERSION` (console banner). |
+| `src/area-pulse-card.ts` | The card element: `setConfig`, `getStubConfig`, `getConfigElement`, `getGridOptions`, `willUpdate` (caches the area index), `render`, the chips, the header, the quick actions, the group popup, the room popup (`_openRoom`, `_renderRoom`, lazy native tiles), the main-light icon and glow. Registers the card in `window.customCards`. Holds `VERSION` (console banner). |
 | `src/discovery.ts` | Pure logic that turns `hass` into card data. `indexArea` (which entities belong to the area, including device to area inheritance, plus the label filter), `buildGroups`/`DEFAULT_GROUPS`/`DEFAULT_TOP_GROUPS`, `reading` (median/sum aggregation), `comfortState`, `watchedEntities` (which state changes cause a re-render), `findMainLight`, `lightColor`. |
+| `src/room.ts` | Pure layout logic for the room popup: `buildRoom` (which sections, in which order, with which entities), `roomLabels` (short names, device caption on duplicates), `matchesQuery`, `isActiveState`. |
 | `src/labels.ts` | Pure label-filter logic (`resolveLabelFilter`, `passesLabelFilter`) and the cached `config/label_registry/list` call. |
 | `src/presets.ts` | Quick-action presets (`lights_toggle`, `vacuum_area`, ...) resolved to a name, icon, state and Home Assistant action. |
 | `src/action-handler.ts` | Tap / hold / double-tap handling that hands off to Home Assistant's own `hass-action` event. |
@@ -59,7 +60,7 @@ Don't write a commit message unless he asks for one. If he does, offer it as a s
 | `src/types.ts` | Config types (`AreaPulseCardConfig`, `QuickActionConfig`, `PresetId`), the slice of the Home Assistant frontend API the card uses. |
 | `src/localize.ts` | All user-facing strings, `en` and `el`, and `localize(hass, key, vars)`. |
 | `src/styles.ts`, `src/popup-styles.ts` | Card and popup CSS. Colours go through CSS variables (`--apc-*`) that fall back to Home Assistant theme variables. |
-| `test/*.test.mjs` | `node:test` unit tests for the pure logic (`discovery`, `labels`, `presets`). `test/register.mjs` + `resolve-ts.mjs` let Node run the `.ts` sources directly. |
+| `test/*.test.mjs` | `node:test` unit tests for the pure logic (`discovery`, `labels`, `presets`, `room`). `test/register.mjs` + `resolve-ts.mjs` let Node run the `.ts` sources directly. |
 | `test/harness.html`, `test/icons.js` | A browser harness that renders the card against a mock `hass` with stubbed `ha-card`/`ha-icon`. Used for screenshots and visual checks. |
 | `dist/area-pulse-card.js` | The built bundle. **Committed on purpose**: HACS serves it and CI fails if it is out of date. |
 
@@ -77,7 +78,7 @@ npm run build          # rewrites dist/area-pulse-card.js
 ```
 
 - Always rebuild `dist/` after changing anything in `src/`. Leave it modified in the working tree (never `git add` it): CI runs `git diff --exit-code dist/` after building and fails if the committed bundle is stale.
-- For anything visual, look at it. Serve the repo (`python3 -m http.server 8765`) and open `http://localhost:8765/test/harness.html` (query options: `?dark=1`, `?lang=el`, `?helpers=1` for the native-tile popup path, `?rgb=255,120,40` for the main light colour). Add a scenario to the harness when you add a visible feature. Check light and dark, and the browser console.
+- For anything visual, look at it. Serve the repo (`python3 -m http.server 8765`) and open `http://localhost:8765/test/harness.html` (query options: `?dark=1`, `?lang=el`, `?helpers=1` for the native-tile popup path, `?rgb=255,120,40` for the main light colour; the "Den" card is the busy-room scenario for the room popup, tap its header). Add a scenario to the harness when you add a visible feature. Check light and dark, and the browser console.
 - The harness stubs Home Assistant's elements, so it proves layout and logic, not integration. See the last section.
 
 ## How we work on this card
@@ -118,6 +119,18 @@ Removal is a breaking change for someone's dashboard, so:
 2. Prefer deprecating: keep accepting the key in `setConfig`, stop documenting it, and say so in the hand-off.
 3. When it really goes: remove it from `types.ts`, logic, render, styles, the editor schema and its mapping, `localize.ts` (both languages), the README (table, example, text), harness scenarios and tests, then rebuild `dist/`. Search for the key across the repo (`grep -rn <key>`) so nothing is left behind.
 
+## The room popup (read before touching it)
+
+Tapping the card header opens a popup with everything in the room. It exists because HA's own area dialog is a wall of equally big tiles. Keep these design rules when changing it:
+
+- **Order by usefulness, decided once.** `buildRoom` returns sections in a fixed order: attention, lights, climate, media, covers, locks, fans, switches, other, presence & openings, sensors. The order is a snapshot taken when the popup opens, so nothing moves while someone drags a slider. Read-only data comes last.
+- **Weight follows interactivity.** Controls are native HA tiles (created lazily, only for rows on screen, because an area can hold hundreds of entities). Status is a compact row. Sensors are dense value cells. Don't turn sensors back into full tiles.
+- **Names are shortened for the room** (`roomLabels`): area prefix dropped everywhere, device prefix dropped for sensors, device name shown as a caption only when two cells would read the same.
+- **It is built from the filtered index**, so `label_filter` applies for free. Never read `hass.entities` directly in the popup.
+- **Mobile first**: one column of controls, two of sensor values, 44px touch targets, sticky section headers, search and close always reachable, nearly full-height bottom sheet.
+- **A configured action wins**: the popup is the default for a header tap when `tap_action` is not set; `room_popup: false` or any `tap_action` turns it off. Don't make the popup swallow a configured action.
+- Opening more-info steps the popup aside and restores it (and its scroll position) after `dialog-closed`. Keep that.
+
 ## The label filter (read before touching discovery)
 
 `label_filter` is what makes the card usable in an area with hundreds of entities. Its rules are deliberate:
@@ -133,7 +146,7 @@ Removal is a breaking change for someone's dashboard, so:
 Ideas the maintainer and users have discussed or that fit the card's direction. These are options, not a to-do list: ask before starting one, and build it behind a config option.
 
 - **Per-group label filters**, e.g. one label for the lights chip and another for the climate readings.
-- **Room popup / detail sheet** opened from the header (history graph, cameras, scenes) instead of only a navigation action.
+- **Room popup extras**: a history graph for the temperature, cameras and scenes as sections, section jump chips on phones, per-section presets.
 - **Sparklines** for temperature/humidity trends, and an **air-quality score** combining CO₂, PM2.5 and VOC.
 - **Energy chip** (power now, energy today) using the area's power and energy sensors.
 - **Occupancy nudges**: "lights on, room empty for 20 min", with a one-tap fix.
@@ -148,7 +161,7 @@ The harness cannot check these, so say in your hand-off which ones the change to
 
 - The visual editor in the real dashboard editor (`ha-form` selectors, the label picker, YAML round-trips).
 - Real registry data: `hass.entities`, `hass.devices` and their `labels`, device to area inheritance, the `config/label_registry/list` call.
-- The popup with native tiles (brightness slider), and opening an entity's more-info dialog from the popup and closing it again.
+- The group popup and the room popup with native tiles (inline brightness slider needs a recent HA), opening an entity's more-info dialog from a popup and closing it again, and the popup on a real phone (bottom sheet, keyboard with the search box).
 - Actions with confirmation, `vacuum_area` (needs Home Assistant 2026.3+ and mapped segments), `navigate`.
 - Sections view sizing (`getGridOptions`), narrow columns, a phone in portrait.
 - Light and dark themes, and a custom theme.

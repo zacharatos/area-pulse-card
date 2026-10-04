@@ -144,6 +144,8 @@ export interface AreaPulseCardConfig {
   layout?: "default" | "compact";
   show_picture?: boolean;
   show_inactive?: boolean;
+  /** Tapping the card header opens the room popup (default true). A `tap_action` takes over when set. */
+  room_popup?: boolean;
   temperature_entity?: string;
   humidity_entity?: string;
   sensor_classes?: string[];

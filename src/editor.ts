@@ -91,6 +91,7 @@ export class AreaPulseCardEditor extends LitElement {
         ],
       },
       { name: "show_picture", selector: { boolean: {} } },
+      { name: "room_popup", selector: { boolean: {} } },
       { name: "link_main_light", selector: { boolean: {} } },
       { name: "main_light", selector: { entity: { filter: { domain: "light" } } } },
       {
@@ -274,6 +275,7 @@ export class AreaPulseCardEditor extends LitElement {
       color: "ed_color",
       layout: "ed_layout",
       show_picture: "ed_show_picture",
+      room_popup: "ed_room_popup",
       show_inactive: "ed_show_inactive",
       temperature_entity: "ed_temperature_entity",
       humidity_entity: "ed_humidity_entity",
@@ -318,6 +320,7 @@ export class AreaPulseCardEditor extends LitElement {
     return {
       layout: "default",
       show_picture: true,
+      room_popup: true,
       show_inactive: false,
       battery_threshold: 20,
       link_main_light: true,
@@ -375,6 +378,7 @@ export class AreaPulseCardEditor extends LitElement {
     // Drop defaults to keep YAML tidy.
     if ((next as any).layout === "default") delete (next as any).layout;
     if ((next as any).show_picture === true) delete (next as any).show_picture;
+    if ((next as any).room_popup === true) delete (next as any).room_popup;
     if ((next as any).show_inactive === false) delete (next as any).show_inactive;
     if ((next as any).battery_threshold === 20) delete (next as any).battery_threshold;
     if ((next as any).link_main_light === true) delete (next as any).link_main_light;

@@ -9,6 +9,7 @@ It is built to sit next to the built-in Tile and Area cards without looking out 
 ![Light theme](docs/light.png)
 ![Dark theme](docs/dark.png)
 ![Group popup](docs/popup.png)
+![Room popup](docs/room.png)
 
 ## Features
 
@@ -18,6 +19,7 @@ It is built to sit next to the built-in Tile and Area cards without looking out 
 - **Main light on the area icon** — tap the icon to toggle the room's main light, hold for its dialog. The icon and the ambient glow take the light's actual colour (RGB, colour temperature or hue/saturation) and the glow scales with brightness. Auto-detected (the only light, or one named ceiling/main/κεντρικό…), or set `main_light`.
 - **Climate at a glance** — uses the area's own temperature/humidity sensor setting when present, otherwise the median of all sensors (same rule as the core area card). Outside the comfort band, temperature turns blue (cold) or red (warm) and humidity white (dry) or blue (humid). On light themes "dry" uses a pale blue-grey, because white text is invisible on a white card. All four colours are configurable.
 - **Two rows of status chips** — first row: motion, doors, windows (what's open or moving); second row: everything else — heating/cooling, lights, smart plugs and switches, fans, covers, locks, media (shows the track title), low batteries and extra readings. Which groups go in the first row is configurable.
+- **Room popup** — tap the card and a popup lists everything in the room, ordered by usefulness: what needs attention, then lights, climate, media and other controls, then presence and openings, then sensors as compact value cards. Search, collapsible sections, "All off" per section, a one-column bottom sheet on phones, and it honours your label filter. See [Room popup](#room-popup).
 - **Group popup** — tapping a chip that covers several entities (e.g. "2 lights on") opens a popup with a native Home Assistant tile per entity, brightness slider included for dimmable lights, plus an "All off / All on" (or open/close all, pause all) button. Opening an entity's dialog from the popup steps it aside and brings it back when you close the dialog. On phones the popup is a bottom sheet. A chip with a single entity opens its more-info dialog directly.
 - **Safety alerts** — moisture, smoke, gas, CO, safety, problem, tamper: red banner and red card outline as soon as one trips.
 - **Extra readings** — optional CO₂ (colour-coded at 1000/1500 ppm), PM2.5, VOC, illuminance, pressure, power (summed), energy, noise.
@@ -101,6 +103,7 @@ actions:
 | `color` | string | `primary` | Accent for the occupied state and plain entity actions. |
 | `layout` | `default` \| `compact` | `default` | Compact shrinks everything and uses icon-only inactive chips and actions. |
 | `show_picture` | bool | `true` | Blend the area picture into the card background. |
+| `room_popup` | bool | `true` | Tapping the card header opens the [room popup](#room-popup). Set `false` to turn it off. A `tap_action` you configure always wins. |
 | `show_inactive` | bool | `false` | Show groups with nothing active ("Doors closed"). |
 | `main_light` | entity | auto | Light the area icon toggles and whose colour tints the icon and glow. |
 | `link_main_light` | bool | `true` | Set `false` to keep the area icon passive. |
@@ -117,6 +120,25 @@ actions:
 | `battery_threshold` | number | `20` | Battery % considered low. |
 | `tap_action` / `hold_action` / `double_tap_action` | action | none | Standard HA actions for the header. |
 | `actions` | list | `[]` | Quick actions, see below. |
+
+### Room popup
+
+Tap the card header (not the main-light icon, which still toggles the light) and a popup opens with everything in the room. It is laid out for use, not as a dump of tiles:
+
+1. **Needs attention** — safety alerts that tripped, low batteries and unavailable entities, so a dead bulb or a leaking sensor is the first thing you see.
+2. **Controls** — lights, climate, media, covers, locks, fans, switches and anything else you can act on (scenes, scripts, vacuums), as native Home Assistant tiles with the control that fits (a brightness slider beside a light's name, playback buttons for media). Active things come first, and each section with a bulk action has an **All off** (or open/close all, pause all) button.
+3. **Presence & openings** — motion, occupancy, doors, windows and other binary sensors as compact rows, what is active first.
+4. **Sensors** — read-only values as dense cards (value large, name small). Temperature and humidity use your comfort colours, CO₂ and PM2.5 turn orange or red when they should. Names lose the area and device prefix ("Sonoff Temperature(LR) Humidity" becomes "Humidity"), and when two cards would read the same the device name is shown as a caption.
+
+Things worth knowing:
+
+- It follows `label_filter`, so an area with hundreds of entities opens a sheet with only the ones you chose.
+- Long sections show the first eight and a **Show N more** button. A search box appears when there are more than twelve entries; it matches names and entity IDs.
+- Sections can be collapsed. The order is fixed when the popup opens, so nothing jumps under your finger while you drag a slider.
+- On phones it is a nearly full-height bottom sheet with one column of controls and two columns of sensor values.
+- Opening Home Assistant's own dialog for an entry (tap a sensor card or status row, or a tile's more-info) steps the popup aside; closing the dialog brings it back where you left it.
+- Configure `tap_action` (for example `navigate`) to make the header do something else, or set `room_popup: false`.
+- `features_position: inline` for the light slider needs a recent Home Assistant; older versions draw the slider below the name.
 
 ### Filtering by labels
 
@@ -181,7 +203,7 @@ npm install
 npm run build        # dist/area-pulse-card.js
 npm run watch        # rebuild on change
 npm run typecheck    # tsc --noEmit
-npm test             # node:test: label filter, area discovery
+npm test             # node:test: label filter, area discovery, presets, room popup layout
 python3 -m http.server 8765   # then open http://localhost:8765/test/harness.html (?dark=1, ?lang=el)
 ```
 
