@@ -1,6 +1,7 @@
 import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
+import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 
 import type {
@@ -14,15 +15,19 @@ import type {
 } from "./types";
 import {
   buildGroups,
+  chipTone,
   comfortState,
   DEFAULT_GROUPS,
+  DEFAULT_MAX_CHIPS,
   DEFAULT_TOP_GROUPS,
   findMainLight,
   indexArea,
   lightColor,
+  pickChips,
   reading,
   watchedEntities,
   type AreaIndex,
+  type ChipCandidate,
   type Group,
   type Reading,
 } from "./discovery";
@@ -48,6 +53,20 @@ const VERSION = "1.1.0";
 interface CardHelpers {
   createCardElement: (config: Record<string, unknown>) => HTMLElement | Promise<HTMLElement>;
 }
+
+/** A chip candidate plus what the card needs to place and draw it. */
+interface ChipItem extends ChipCandidate {
+  top: boolean;
+  render: () => TemplateResult;
+}
+
+/** Icon colour per tone with `chip_colors: state`; no tone keeps the neutral secondary text colour. */
+const TONE_COLOR: Record<ReturnType<typeof chipTone>, string> = {
+  "": "var(--secondary-text-color)",
+  on: "var(--apc-amber)",
+  warn: "var(--apc-orange)",
+  bad: "var(--apc-red)",
+};
 
 interface GroupMeta {
   icon: string;
@@ -161,6 +180,10 @@ export class AreaPulseCard extends LitElement {
     if (config.actions && !Array.isArray(config.actions)) throw new Error("`actions` must be a list");
     if (config.label_filter && (typeof config.label_filter !== "object" || Array.isArray(config.label_filter)))
       throw new Error("`label_filter` must be a map with `include` and/or `exclude`");
+    if (config.chip_colors !== undefined && config.chip_colors !== "state" && config.chip_colors !== "category")
+      throw new Error("`chip_colors` must be `state` or `category`");
+    if (config.max_chips !== undefined && !(Number.isInteger(config.max_chips) && config.max_chips >= 0))
+      throw new Error("`max_chips` must be a whole number, 0 or more (0 shows every chip)");
     this._config = { ...config };
     this.layout = config.layout === "compact" ? "compact" : "default";
     this._popup = undefined;
@@ -317,6 +340,8 @@ export class AreaPulseCard extends LitElement {
       linked: !!mainLight,
       "light-on": mainOn,
     };
+    const chips = this._chipModel(groups, extras, roomEnabled);
+    const onFace = new Set(chips.shown.map((c) => c.group).filter((g): g is GroupId => !!g));
     const icon = html`<ha-icon .icon=${config.icon || area.icon || DEFAULT_ICON}></ha-icon>`;
     const dot = occupied ? html`<span class="presence-dot"></span>` : nothing;
 
@@ -356,13 +381,13 @@ export class AreaPulseCard extends LitElement {
               : html`<div class=${classMap(iconClasses)}>${icon}${dot}</div>`}
             <div class="titles">
               <div class="name">${config.name || area.name}</div>
-              <div class="secondary">${this._secondary(groups)}</div>
+              <div class="secondary">${this._secondary(groups, onFace)}</div>
             </div>
             ${this._renderClimate(temperature, humidity)}
           </div>
           ${this._renderLabelHint(index)}
-          ${alerts.length ? this._renderAlertBanner(alerts) : nothing}
-          ${this._renderChips(groups, extras)}
+          ${alerts.length ? keyed(alerts.join(), this._renderAlertBanner(alerts)) : nothing}
+          ${this._renderChips(chips)}
           ${actions.length ? this._renderActions(actions) : nothing}
         </div>
       </ha-card>
@@ -390,7 +415,8 @@ export class AreaPulseCard extends LitElement {
     return html`<ha-card><div class="warning"><ha-icon icon="mdi:alert-outline"></ha-icon>${text}</div></ha-card>`;
   }
 
-  private _secondary(groups: Partial<Record<GroupId, Group>>) {
+  /** Subtitle. Leaves out what a chip on the card face already says (`onFace`). */
+  private _secondary(groups: Partial<Record<GroupId, Group>>, onFace: ReadonlySet<GroupId> = new Set()) {
     const hass = this.hass!;
     const parts: string[] = [];
     const presence = groups.presence;
@@ -401,14 +427,14 @@ export class AreaPulseCard extends LitElement {
       parts.push(since !== undefined ? `${label} ${localize(hass, "for", { t: this._ago(since) })}` : label);
     }
     const lights = groups.lights;
-    if (lights?.active.length) {
+    if (lights?.active.length && !onFace.has("lights")) {
       parts.push(
         localize(hass, lights.active.length === 1 ? "light_on" : "lights_on_n", { n: lights.active.length })
       );
     }
     if (!parts.length) {
       const media = groups.media;
-      if (media?.active.length) parts.push(localize(hass, "media_playing"));
+      if (media?.active.length && !onFace.has("media")) parts.push(localize(hass, "media_playing"));
     }
     return parts.map((p, i) => html`${i ? html`<span class="dot">·</span>` : nothing}${p}`);
   }
@@ -462,13 +488,17 @@ export class AreaPulseCard extends LitElement {
     `;
   }
 
-  private _renderChips(groups: Partial<Record<GroupId, Group>>, extras: Reading[]) {
+  /**
+   * Which chips go on the card face. With a cap (`max_chips`, default 3) the face shows the most
+   * important ones in one row and a "+N" chip opens the room popup; without the room popup, or with
+   * `max_chips: 0`, every chip shows in the configured order and rows (`top_groups`).
+   */
+  private _chipModel(groups: Partial<Record<GroupId, Group>>, extras: Reading[], roomEnabled: boolean) {
     const config = this._config!;
     const order = (config.groups ?? DEFAULT_GROUPS).filter((g) => g !== "presence");
     const top = new Set(config.top_groups ?? DEFAULT_TOP_GROUPS);
     const showInactive = config.show_inactive === true;
-    const row1: TemplateResult[] = [];
-    const row2: TemplateResult[] = [];
+    const items: ChipItem[] = [];
 
     for (const id of order) {
       const group = groups[id];
@@ -477,53 +507,97 @@ export class AreaPulseCard extends LitElement {
       if (id === "alerts" && (this.layout !== "compact" || !group.active.length)) continue;
       if (id === "batteries" && !group.active.length) continue;
       if (!group.active.length && !showInactive) continue;
-      (top.has(id) ? row1 : row2).push(this._groupChip(group));
+      items.push({ group: id, active: group.active.length > 0, top: top.has(id), render: () => this._groupChip(group) });
     }
     // Passive readings close the second row.
-    for (const r of extras) row2.push(this._statChip(r));
+    for (const r of extras) {
+      const severity = this._statSeverity(r);
+      items.push({ active: true, severity, top: false, render: () => this._statChip(r, severity) });
+    }
 
-    if (!row1.length && !row2.length) return nothing;
+    const max = roomEnabled ? config.max_chips ?? DEFAULT_MAX_CHIPS : 0;
+    return { ...pickChips(items, max), capped: max > 0 };
+  }
+
+  private _renderChips(chips: { shown: ChipItem[]; hidden: ChipItem[]; capped: boolean }) {
+    const { shown, hidden, capped } = chips;
+    if (!shown.length) return nothing;
+    if (capped) {
+      const hass = this.hass!;
+      return html`
+        <div class="chip-rows">
+          <div class="chips">
+            ${shown.map((c) => c.render())}
+            ${hidden.length
+              ? html`<button
+                  class="chip more"
+                  aria-haspopup="dialog"
+                  aria-label=${localize(hass, "more_n", { n: hidden.length })}
+                  title=${localize(hass, "more_n", { n: hidden.length })}
+                  @click=${() => this._openRoom()}
+                >
+                  <span class="label">+${hidden.length}</span>
+                </button>`
+              : nothing}
+          </div>
+        </div>
+      `;
+    }
+    const row1 = shown.filter((c) => c.top).map((c) => c.render());
+    const row2 = shown.filter((c) => !c.top).map((c) => c.render());
     return html`
       <div class="chip-rows">
         ${row1.length ? html`<div class="chips">${row1}</div>` : nothing}
         ${row2.length ? html`<div class="chips">${row2}</div>` : nothing}
       </div>
-    `
+    `;
   }
 
-  private _statChip(r: Reading) {
-    let severity = "";
-    if (r.deviceClass === "carbon_dioxide") severity = r.value >= 1500 ? "bad" : r.value >= 1000 ? "warn" : "";
-    if (r.deviceClass === "pm25") severity = r.value >= 35 ? "bad" : r.value >= 12 ? "warn" : "";
+  private _statSeverity(r: Reading): "" | "warn" | "bad" {
+    if (r.deviceClass === "carbon_dioxide") return r.value >= 1500 ? "bad" : r.value >= 1000 ? "warn" : "";
+    if (r.deviceClass === "pm25") return r.value >= 35 ? "bad" : r.value >= 12 ? "warn" : "";
+    return "";
+  }
+
+  private _statChip(r: Reading, severity: "" | "warn" | "bad") {
     const digits = Math.abs(r.value) >= 100 ? 0 : 1;
     return html`
-      <button class="chip stat ${severity}" @click=${() => this._moreInfo(r.entities[0])}>
+      <button
+        class=${classMap({ chip: true, stat: true, [severity]: !!severity, calm: this._calmChips })}
+        @click=${() => this._moreInfo(r.entities[0])}
+      >
         <ha-icon .icon=${SENSOR_ICONS[r.deviceClass] ?? "mdi:gauge"}></ha-icon>
         <span class="label">${this._num(r.value, digits)} ${r.unit}</span>
       </button>
     `;
   }
 
+  /** `chip_colors: state` (the default): colour only where it means something. */
+  private get _calmChips(): boolean {
+    return this._config?.chip_colors !== "category";
+  }
+
   private _groupChip(group: Group) {
     const meta = GROUP_META[group.id];
     const active = group.active.length > 0;
-    let color = meta.color;
+    const calm = this._calmChips;
+    let color = calm ? TONE_COLOR[chipTone(group.id)] : meta.color;
     let icon = active ? meta.icon : meta.iconOff;
     let label = this._groupLabel(group);
 
     if (group.id === "climate") {
       const s = this.hass!.states[group.active[0] ?? group.entities[0]];
       const action = String(s?.attributes.hvac_action ?? (s?.state === "off" ? "off" : "idle"));
-      if (action === "cooling") { color = "var(--apc-blue)"; icon = "mdi:snowflake"; }
+      if (action === "cooling") { if (!calm) color = "var(--apc-blue)"; icon = "mdi:snowflake"; }
       else if (action === "heating") { icon = "mdi:fire"; }
-      else if (action === "drying") { color = "var(--apc-amber)"; icon = "mdi:water-percent"; }
-      else if (action === "fan") { color = "var(--apc-light-blue)"; icon = "mdi:fan"; }
+      else if (action === "drying") { if (!calm) color = "var(--apc-amber)"; icon = "mdi:water-percent"; }
+      else if (action === "fan") { if (!calm) color = "var(--apc-light-blue)"; icon = "mdi:fan"; }
       label = this._climateLabel(s, action);
     }
 
     return html`
       <button
-        class=${classMap({ chip: true, active, selected: this._popup === group.id })}
+        class=${classMap({ chip: true, active, calm, selected: this._popup === group.id })}
         style=${styleMap({ "--c": color })}
         aria-haspopup=${group.entities.length > 1 ? "dialog" : nothing}
         @click=${() => this._chipClick(group)}
@@ -1005,6 +1079,13 @@ export class AreaPulseCard extends LitElement {
     return next;
   }
 
+  /** Section colour; with `chip_colors: state` the header icon is neutral, except red for "needs attention". */
+  private _sectionStyle(id: RoomSection["id"], color: string): Record<string, string> {
+    const style: Record<string, string> = { "--c": color };
+    if (this._calmChips) style["--apc-sec-icon"] = id === "attention" ? "var(--apc-red)" : "var(--secondary-text-color)";
+    return style;
+  }
+
   private _sectionMeta(id: RoomSection["id"]): { icon: string; color: string; title: string } {
     const t = (k: string) => localize(this.hass, k);
     switch (id) {
@@ -1146,7 +1227,7 @@ export class AreaPulseCard extends LitElement {
     const expanded = ui.expanded.has(sec.id);
 
     return html`
-      <section class="room-sec" style=${styleMap({ "--c": meta.color })} data-section=${sec.id}>
+      <section class="room-sec" style=${styleMap(this._sectionStyle(sec.id, meta.color))} data-section=${sec.id}>
         <div class="sec-head">
           <button
             class="sec-toggle"

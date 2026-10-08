@@ -18,7 +18,7 @@ export const popupStyles = css`
     backdrop-filter: blur(6px);
   }
   dialog.apc-popup[open] .popup-surface {
-    animation: apc-pop 200ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+    animation: apc-pop var(--apc-motion-normal, 200ms) cubic-bezier(0.2, 0.9, 0.3, 1.1);
   }
   @keyframes apc-pop {
     from { opacity: 0; transform: translateY(12px) scale(0.98); }
@@ -264,7 +264,8 @@ export const popupStyles = css`
     --mdc-icon-size: 20px;
   }
   .sec-toggle:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
-  .sec-icon { color: var(--c); flex: none; }
+  /* chip_colors: state sets --apc-sec-icon (neutral, red for attention); category keeps the section colour. */
+  .sec-icon { color: var(--apc-sec-icon, var(--c)); flex: none; }
   .sec-title { font-size: 15px; font-weight: 500; letter-spacing: 0.01em; }
   .sec-count { font-size: 12px; color: var(--secondary-text-color); }
   .sec-chevron { margin-left: auto; color: var(--secondary-text-color); flex: none; }

@@ -230,6 +230,76 @@ export function comfortState(
   return "ok";
 }
 
+/** How many chips the card face shows before the rest collapse into a "+N" chip. */
+export const DEFAULT_MAX_CHIPS = 3;
+
+/**
+ * Which chips win a place on the card face when there are more than `max_chips`:
+ * problems, then openings, then lights, climate and media, then the rest.
+ */
+export const CHIP_PRIORITY: GroupId[] = [
+  "alerts",
+  "batteries",
+  "locks",
+  "doors",
+  "windows",
+  "lights",
+  "climate",
+  "media",
+  "covers",
+  "fans",
+  "switches",
+  "motion",
+];
+
+/** Colour meaning of a chip with `chip_colors: state`: problem, needs a look, light on, or none. */
+export type ChipTone = "" | "on" | "warn" | "bad";
+
+export function chipTone(id: GroupId): ChipTone {
+  switch (id) {
+    case "alerts":
+    case "batteries":
+    case "locks":
+      return "bad";
+    case "doors":
+    case "windows":
+      return "warn";
+    case "lights":
+      return "on";
+    default:
+      return "";
+  }
+}
+
+/** A chip the card could show: a status group, or a passive reading (`group` unset). */
+export interface ChipCandidate {
+  group?: GroupId;
+  active: boolean;
+  /** Readings only: out of range. */
+  severity?: "" | "warn" | "bad";
+}
+
+/**
+ * Split chips into the ones on the card face and the ones behind "+N". Active chips come before
+ * inactive ones, each in `CHIP_PRIORITY` order; an out-of-range reading ranks with the openings and
+ * a normal reading closes the active set. `max <= 0` shows everything in the given order.
+ */
+export function pickChips<T extends ChipCandidate>(items: T[], max: number): { shown: T[]; hidden: T[] } {
+  if (max <= 0) return { shown: items, hidden: [] };
+  const windows = CHIP_PRIORITY.indexOf("windows");
+  const rank = (c: T): number => {
+    if (!c.group) return c.severity ? windows + 0.5 : CHIP_PRIORITY.length;
+    const tier = c.active ? 0 : 100;
+    const i = CHIP_PRIORITY.indexOf(c.group);
+    return tier + (i < 0 ? CHIP_PRIORITY.length : i);
+  };
+  const sorted = items
+    .map((c, i) => ({ c, i, r: rank(c) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.c);
+  return { shown: sorted.slice(0, max), hidden: sorted.slice(max) };
+}
+
 /** Every entity whose state change can alter the card. Used to skip needless re-renders. */
 export function watchedEntities(
   config: AreaPulseCardConfig,

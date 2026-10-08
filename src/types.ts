@@ -152,8 +152,16 @@ export interface AreaPulseCardConfig {
   alert_classes?: string[];
   /** All status chips to show, in order. */
   groups?: GroupId[];
-  /** Chips placed in the first row (default: motion, doors, windows). The rest go in the second row. */
+  /** Chips placed in the first row (default: motion, doors, windows). The rest go in the second row. Only used with `max_chips: 0`. */
   top_groups?: GroupId[];
+  /**
+   * How chips are coloured. `state` (default): colour only for what needs a look (open), problems
+   * (alerts, low battery, unlocked) and lights, with neutral text and a coloured icon. `category`:
+   * one colour per kind of device, tinted text and background (the original look).
+   */
+  chip_colors?: "state" | "category";
+  /** Chips on the card face before the rest collapse into a "+N" chip that opens the room popup (default 3, 0 = all). */
+  max_chips?: number;
   /** Light toggled by the area icon and used for the glow colour. Auto-detected when omitted. */
   main_light?: string;
   /** Set to false to keep the area icon passive. */

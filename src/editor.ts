@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import type { AreaPulseCardConfig, HomeAssistant, QuickActionConfig } from "./types";
-import { DEFAULT_ALERT_CLASSES, DEFAULT_GROUPS, DEFAULT_TOP_GROUPS, SENSOR_CLASS_OPTIONS } from "./discovery";
+import { DEFAULT_ALERT_CLASSES, DEFAULT_GROUPS, DEFAULT_MAX_CHIPS, DEFAULT_TOP_GROUPS, SENSOR_CLASS_OPTIONS } from "./discovery";
 import { PRESETS } from "./presets";
 import { toList } from "./labels";
 import { localize } from "./localize";
@@ -150,6 +150,19 @@ export class AreaPulseCardEditor extends LitElement {
         schema: [
           { name: "show_inactive", selector: { boolean: {} } },
           {
+            name: "chip_colors",
+            selector: {
+              select: {
+                mode: "dropdown",
+                options: [
+                  { value: "state", label: t("ed_chip_colors_state") },
+                  { value: "category", label: t("ed_chip_colors_category") },
+                ],
+              },
+            },
+          },
+          { name: "max_chips", selector: { number: { min: 0, max: 12, mode: "box" } } },
+          {
             name: "groups",
             selector: {
               select: {
@@ -277,6 +290,8 @@ export class AreaPulseCardEditor extends LitElement {
       show_picture: "ed_show_picture",
       room_popup: "ed_room_popup",
       show_inactive: "ed_show_inactive",
+      chip_colors: "ed_chip_colors",
+      max_chips: "ed_max_chips",
       temperature_entity: "ed_temperature_entity",
       humidity_entity: "ed_humidity_entity",
       sensor_classes: "ed_sensor_classes",
@@ -322,6 +337,8 @@ export class AreaPulseCardEditor extends LitElement {
       show_picture: true,
       room_popup: true,
       show_inactive: false,
+      chip_colors: "state",
+      max_chips: DEFAULT_MAX_CHIPS,
       battery_threshold: 20,
       link_main_light: true,
       top_groups: DEFAULT_TOP_GROUPS,
@@ -380,6 +397,8 @@ export class AreaPulseCardEditor extends LitElement {
     if ((next as any).show_picture === true) delete (next as any).show_picture;
     if ((next as any).room_popup === true) delete (next as any).room_popup;
     if ((next as any).show_inactive === false) delete (next as any).show_inactive;
+    if ((next as any).chip_colors === "state") delete (next as any).chip_colors;
+    if ((next as any).max_chips === DEFAULT_MAX_CHIPS) delete (next as any).max_chips;
     if ((next as any).battery_threshold === 20) delete (next as any).battery_threshold;
     if ((next as any).link_main_light === true) delete (next as any).link_main_light;
     this._commit(next);

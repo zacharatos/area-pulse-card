@@ -31,11 +31,17 @@ export const cardStyles = css`
     --apc-glow-scale: calc(var(--pulse-glow-alpha, 0.16) / 0.16);
     --apc-neutral-bg: var(--pulse-surface-neutral, color-mix(in srgb, var(--primary-text-color) 6%, transparent));
     --apc-neutral-bg-hover: var(--pulse-surface-neutral-hover, color-mix(in srgb, var(--primary-text-color) 10%, transparent));
+    --apc-neutral-bg-strong: var(--pulse-surface-neutral-strong, color-mix(in srgb, var(--primary-text-color) 14%, transparent));
     --apc-radius: var(--pulse-radius, var(--ha-card-border-radius, 12px));
     --apc-control-radius: var(--pulse-control-radius, var(--ha-card-features-border-radius, var(--feature-border-radius, 12px)));
     --apc-chip-height: var(--pulse-chip-height, 30px);
     --apc-gap: var(--pulse-gap, 12px);
     --apc-pad: var(--pulse-pad, 12px);
+    /* Motion: the theme's rhythm, else the durations the card always used. */
+    --apc-motion-fast: var(--pulse-motion-fast, 120ms);
+    --apc-motion-normal: var(--pulse-motion-normal, 200ms);
+    --apc-motion-slow: var(--pulse-motion-slow, 300ms);
+    --apc-ease: var(--pulse-ease, ease);
     display: block;
     height: 100%;
   }
@@ -50,11 +56,11 @@ export const cardStyles = css`
     display: flex;
     flex-direction: column;
     container-type: inline-size;
-    transition: box-shadow 300ms ease, border-color 300ms ease;
+    transition: box-shadow var(--apc-motion-slow) var(--apc-ease), border-color var(--apc-motion-slow) var(--apc-ease);
   }
+  /* The banner carries the alert; the card's own edge (if the theme draws one) only turns red. */
   ha-card.alerting {
     border-color: var(--apc-red);
-    box-shadow: 0 0 0 1px var(--apc-red), var(--ha-card-box-shadow, none);
   }
 
   /* Ambient layers */
@@ -73,7 +79,7 @@ export const cardStyles = css`
     inset: 0;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 600ms ease;
+    transition: opacity calc(var(--apc-motion-slow) * 2) var(--apc-ease);
     background: radial-gradient(
       140% 100% at 0% 0%,
       rgba(var(--apc-glow-rgb), calc(var(--apc-glow-alpha) * var(--apc-glow-scale))) 0%,
@@ -118,7 +124,7 @@ export const cardStyles = css`
     justify-content: center;
     background: var(--apc-neutral-bg);
     color: var(--secondary-text-color);
-    transition: background-color 300ms ease, color 300ms ease;
+    transition: background-color var(--apc-motion-slow) var(--apc-ease), color var(--apc-motion-slow) var(--apc-ease);
     --mdc-icon-size: 24px;
   }
   .area-icon.occupied {
@@ -129,7 +135,8 @@ export const cardStyles = css`
     cursor: pointer;
     outline: none;
     -webkit-tap-highlight-color: transparent;
-    transition: background-color 300ms ease, color 300ms ease, transform 120ms ease;
+    transition: background-color var(--apc-motion-slow) var(--apc-ease), color var(--apc-motion-slow) var(--apc-ease),
+      transform var(--apc-motion-fast) var(--apc-ease);
   }
   .area-icon.linked:hover { background: var(--apc-neutral-bg-hover); }
   .area-icon.linked:active { transform: scale(0.94); }
@@ -156,7 +163,9 @@ export const cardStyles = css`
     inset: -2px;
     border-radius: 50%;
     border: 2px solid var(--apc-green);
-    animation: apc-ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+    opacity: 0;
+    /* Once, when presence starts (the dot is created then); a constant ping is decoration. */
+    animation: apc-ping 2.4s cubic-bezier(0, 0, 0.2, 1) 1;
   }
   @keyframes apc-ping {
     0% { transform: scale(1); opacity: 0.7; }
@@ -246,7 +255,8 @@ export const cardStyles = css`
     --mdc-icon-size: 20px;
   }
   .alert-banner ha-icon {
-    animation: apc-blink 1.4s ease-in-out infinite;
+    /* A few blinks when the alert appears, then still: the banner itself keeps the attention. */
+    animation: apc-blink 1.4s ease-in-out 3;
   }
   .alert-banner .text {
     min-width: 0;
@@ -258,7 +268,7 @@ export const cardStyles = css`
     50% { opacity: 0.35; }
   }
 
-  /* Status chips: two invisible rows (openings & motion, then everything else) */
+  /* Status chips: one row capped at max_chips, or (max_chips: 0) two rows: openings & motion, then everything else */
   .chip-rows {
     display: flex;
     flex-direction: column;
@@ -287,7 +297,8 @@ export const cardStyles = css`
     white-space: nowrap;
     max-width: 100%;
     box-sizing: border-box;
-    transition: background-color 200ms ease, color 200ms ease, transform 120ms ease;
+    transition: background-color var(--apc-motion-normal) var(--apc-ease), color var(--apc-motion-normal) var(--apc-ease),
+      transform var(--apc-motion-fast) var(--apc-ease);
     --mdc-icon-size: 16px;
   }
   .chip:hover { background: var(--apc-neutral-bg-hover); }
@@ -304,6 +315,16 @@ export const cardStyles = css`
   .chip.stat ha-icon { color: var(--secondary-text-color); }
   .chip.stat.warn ha-icon, .chip.stat.warn { color: var(--apc-orange); }
   .chip.stat.bad ha-icon, .chip.stat.bad { color: var(--apc-red); }
+  /* chip_colors: state (default). Neutral fill and text; only the icon carries the meaning (--c). */
+  .chip.calm.active {
+    color: var(--primary-text-color);
+    background: var(--apc-neutral-bg);
+  }
+  .chip.calm.active:hover { background: var(--apc-neutral-bg-hover); }
+  .chip.calm.active ha-icon { color: var(--c); }
+  .chip.stat.calm.warn, .chip.stat.calm.bad { color: var(--primary-text-color); }
+  /* "+N": the chips that didn't fit on the face; opens the room popup. */
+  .chip.more { padding: 0 11px; font-variant-numeric: tabular-nums; }
   .chip .label {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -336,16 +357,18 @@ export const cardStyles = css`
     -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
-    transition: background-color 200ms ease, color 200ms ease, transform 120ms ease;
+    transition: background-color var(--apc-motion-normal) var(--apc-ease), color var(--apc-motion-normal) var(--apc-ease),
+      transform var(--apc-motion-fast) var(--apc-ease);
     --mdc-icon-size: 20px;
   }
   .action ha-icon { color: var(--c); flex: none; }
   .action:hover { background: var(--apc-neutral-bg-hover); }
   .action:active { transform: scale(0.96); }
   .action:focus-visible { outline: 2px solid var(--c); outline-offset: 1px; }
-  .action.active {
-    background: color-mix(in srgb, var(--c) 20%, transparent);
-    color: color-mix(in srgb, var(--c) 72%, var(--primary-text-color));
+  /* Like an active tile: a stronger neutral fill, colour stays on the icon. */
+  .action.active,
+  .action.active:hover {
+    background: var(--apc-neutral-bg-strong);
   }
   .action[disabled] { opacity: 0.4; cursor: default; pointer-events: none; }
   .action .label {
@@ -380,6 +403,8 @@ export const cardStyles = css`
   :host([layout="compact"]) .chip { height: 26px; padding: 0 9px 0 7px; }
   :host([layout="compact"]) .chip:not(.active) .label { display: none; }
   :host([layout="compact"]) .chip:not(.active) { padding: 0 6px; }
+  :host([layout="compact"]) .chip.more { padding: 0 9px; }
+  :host([layout="compact"]) .chip.more .label { display: inline; }
   :host([layout="compact"]) .action { height: 36px; }
   :host([layout="compact"]) .actions,
   :host([layout="compact"]) .actions.dense { grid-template-columns: repeat(auto-fit, minmax(40px, 1fr)); }

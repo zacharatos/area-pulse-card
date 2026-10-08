@@ -18,13 +18,13 @@ It is built to sit next to the built-in Tile and Area cards without looking out 
 - **Presence first** — occupancy/presence sensors (mmWave etc.) drive an "Occupied for 12 min / Clear for 2 h" line and a live presence dot; falls back to motion sensors when the room has no presence sensor.
 - **Main light on the area icon** — tap the icon to toggle the room's main light, hold for its dialog. The icon and the ambient glow take the light's actual colour (RGB, colour temperature or hue/saturation) and the glow scales with brightness. Auto-detected (the only light, or one named ceiling/main/κεντρικό…), or set `main_light`.
 - **Climate at a glance** — uses the area's own temperature/humidity sensor setting when present, otherwise the median of all sensors (same rule as the core area card). Outside the comfort band, temperature turns blue (cold) or red (warm) and humidity white (dry) or blue (humid). On light themes "dry" uses a pale blue-grey, because white text is invisible on a white card. All four colours are configurable. With the [Pulse theme](https://github.com/zacharatos/pulse-theme), the card uses its calmer palette and comfort colours.
-- **Two rows of status chips** — first row: motion, doors, windows (what's open or moving); second row: everything else — heating/cooling, lights, smart plugs and switches, fans, covers, locks, media (shows the track title), low batteries and extra readings. Which groups go in the first row is configurable.
+- **Calm status chips** — motion, doors and windows, heating/cooling, lights, smart plugs and switches, fans, covers, locks, media (shows the track title), low batteries and extra readings. The card face shows the three that matter most (problems, then what's open, then lights, climate and media) and a "+N" chip opens the room popup with the rest. Colour is kept for what needs a look: open doors and windows in orange, problems (low battery, unlocked, alerts) in red, lights that are on in gold; everything else stays neutral, and only the icon is coloured. `max_chips` changes the cap (`0` shows every chip, in two rows), `chip_colors: category` brings back one colour per kind of device.
 - **Room popup** — tap the card and a popup lists everything in the room, ordered by usefulness: what needs attention, then lights, climate, media and other controls, then presence and openings, then sensors as compact value cards. Search, collapsible sections, "All off" per section, a one-column bottom sheet on phones, and it honours your label filter. See [Room popup](#room-popup).
 - **Group popup** — tapping a chip that covers several entities (e.g. "2 lights on") opens a popup with a native Home Assistant tile per entity, brightness slider included for dimmable lights, plus an "All off / All on" (or open/close all, pause all) button. Opening an entity's dialog from the popup steps it aside and brings it back when you close the dialog. On phones the popup is a bottom sheet. A chip with a single entity opens its more-info dialog directly.
-- **Safety alerts** — moisture, smoke, gas, CO, safety, problem, tamper: red banner and red card outline as soon as one trips.
+- **Safety alerts** — moisture, smoke, gas, CO, safety, problem, tamper: a red banner as soon as one trips (its icon blinks a few times, then stays still), and the card's edge turns red when your theme draws one.
 - **Extra readings** — optional CO₂ (colour-coded at 1000/1500 ppm), PM2.5, VOC, illuminance, pressure, power (summed), energy, noise.
 - **Quick actions** — presets or any entity / any HA action, with tap, hold and double-tap.
-- **Ambient cues** — light-coloured glow while lights are on, optional area picture blended into the background.
+- **Ambient cues** — light-coloured glow while lights are on, optional area picture blended into the background. The presence dot pings once when someone arrives; nothing loops. Transitions follow the [Pulse theme](https://github.com/zacharatos/pulse-theme)'s motion tokens when it's installed, and blinking stops with "reduce motion".
 - **Sections-ready** — `getGridOptions` for the sections view, container queries for narrow columns, a `compact` layout.
 - **Visual editor** — built on HA's own `ha-form` selectors; YAML optional.
 - **Localised** — English and Greek; numbers, units and relative times use your HA locale.
@@ -64,6 +64,8 @@ color: light-blue            # HA colour token or any CSS colour
 layout: default              # default | compact
 show_picture: true
 show_inactive: false         # also show "Windows closed", "Lights off", ...
+chip_colors: state           # state | category (one colour per kind of device)
+max_chips: 3                 # chips on the face, the rest behind "+N"; 0 = all
 main_light: light.living_room_ceiling   # optional; auto-detected
 colors:
   temperature_low: blue
@@ -75,7 +77,7 @@ comfort_temperature: { min: 20, max: 24 }
 comfort_humidity: { min: 40, max: 60 }
 sensor_classes: [carbon_dioxide, illuminance]
 groups: [alerts, motion, doors, windows, climate, lights, switches, media, batteries]
-top_groups: [motion, doors, windows]
+top_groups: [motion, doors, windows]   # only with max_chips: 0
 exclude_entities: [binary_sensor.living_room_tv_motion]
 label_filter:
   include: [Living room card]   # label name or ID
@@ -105,6 +107,8 @@ actions:
 | `show_picture` | bool | `true` | Blend the area picture into the card background. |
 | `room_popup` | bool | `true` | Tapping the card header opens the [room popup](#room-popup). Set `false` to turn it off. A `tap_action` you configure always wins. |
 | `show_inactive` | bool | `false` | Show groups with nothing active ("Doors closed"). |
+| `chip_colors` | `state` \| `category` | `state` | `state`: neutral chips, colour only on the icon of what needs a look (open: orange), problems (alerts, low battery, unlocked: red) and lights (gold). The room popup's section icons follow suit: neutral, red for "Needs attention". `category`: one colour per kind of device, with tinted text and background, and coloured section icons (the original look). |
+| `max_chips` | number | `3` | Chips on the card face. The most important ones win (problems, open, lights, climate, media, the rest; active before inactive) and a "+N" chip opens the room popup. `0` shows every chip in the order of `groups`, in two rows (`top_groups`). Without the room popup every chip is shown. |
 | `main_light` | entity | auto | Light the area icon toggles and whose colour tints the icon and glow. |
 | `link_main_light` | bool | `true` | Set `false` to keep the area icon passive. |
 | `colors` | map | see below | `temperature_low` (blue), `temperature_high` (red), `humidity_low` (white; pale blue-grey on light themes), `humidity_high` (blue). HA colour tokens or CSS colours. |
@@ -112,7 +116,7 @@ actions:
 | `comfort_temperature` / `comfort_humidity` | `{min,max}` or `[min,max]` | `19–25 °C` (`68–76 °F`) / `35–65 %` | Comfort band used for colouring. |
 | `sensor_classes` | list | `[]` | Extra readings: `illuminance`, `carbon_dioxide`, `pm25`, `volatile_organic_compounds`, `pressure`, `power`, `energy`, `sound_pressure`. |
 | `groups` | list | all | Which status chips to show, in order: `alerts`, `motion`, `doors`, `windows`, `climate`, `lights`, `switches`, `fans`, `covers`, `locks`, `media`, `batteries`. |
-| `top_groups` | list | `motion, doors, windows` | Groups placed in the first chip row; every other group goes in the second row. |
+| `top_groups` | list | `motion, doors, windows` | With `max_chips: 0`: groups placed in the first chip row; every other group goes in the second row. |
 | `alert_classes` | list | `moisture, smoke, gas, carbon_monoxide, safety, problem, tamper` | Binary-sensor device classes treated as alerts. |
 | `presence_entities` | list | auto | Force which entities define presence (e.g. a template or `input_boolean`). |
 | `exclude_entities` | list | `[]` | Ignore these entities everywhere. |

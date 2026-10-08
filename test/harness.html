@@ -194,6 +194,8 @@
     { type: "custom:area-pulse-card", area: "kitchen", show_inactive: true, actions: [{ preset: "lights_on" }, { preset: "lights_off" }] },
     { type: "custom:area-pulse-card", area: "den", actions: [{ preset: "lights_toggle" }] },
     { type: "custom:area-pulse-card", area: "bedroom", layout: "compact", show_inactive: true, actions: [{ preset: "lights_toggle" }, { preset: "covers_close" }, { preset: "everything_off" }] },
+    // The original look: one colour per kind of device, every chip in two rows.
+    { type: "custom:area-pulse-card", area: "living_room", sensor_classes: ["carbon_dioxide", "illuminance"], chip_colors: "category", max_chips: 0, actions: [{ preset: "lights_toggle" }] },
   ];
   const grid = document.querySelector(".grid");
   window.cards = configs.map((c) => {
