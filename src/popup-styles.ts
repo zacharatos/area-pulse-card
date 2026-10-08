@@ -171,8 +171,8 @@ export const popupStyles = css`
     --mdc-icon-size: 24px;
   }
   .room-icon.light-on {
-    color: rgb(var(--room-rgb, 255, 193, 7));
-    background: rgba(var(--room-rgb, 255, 193, 7), 0.18);
+    color: rgb(var(--room-rgb, var(--rgb-pulse-active, 255, 193, 7)));
+    background: rgba(var(--room-rgb, var(--rgb-pulse-active, 255, 193, 7)), 0.18);
   }
   .room-head .climate { flex: none; }
   .room-head .popup-close { width: 44px; height: 44px; }
@@ -238,15 +238,13 @@ export const popupStyles = css`
   }
 
   .room-sec { padding-bottom: 8px; }
+  /* Not sticky: a sticky header needs a painted background, which stacks on a translucent dialog
+     (Pulse Glass) and shows as a lighter band, and backdrop blur doesn't apply inside the dialog. */
   .sec-head {
-    position: sticky;
-    top: 0;
-    z-index: 2;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 6px 0;
-    background: var(--ha-dialog-surface-background, var(--mdc-theme-surface, var(--card-background-color, #fff)));
   }
   .sec-toggle {
     flex: 1;

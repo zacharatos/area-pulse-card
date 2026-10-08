@@ -294,17 +294,16 @@ export class AreaPulseCard extends LitElement {
     const glowSource = mainOn
       ? mainState
       : (groups.lights?.active ?? []).map((id) => hass.states[id]).find((s) => !!s);
-    const glowRgb = glowSource ? lightColor(glowSource) ?? [255, 193, 7] : undefined;
+    // A light without a colour of its own glows in the theme's "on" colour (--apc-glow-rgb in styles.ts).
+    const glowRgb = glowSource ? lightColor(glowSource) : undefined;
     const brightness = Number(glowSource?.attributes.brightness ?? 255);
     const glowStrength = 0.1 + 0.12 * Math.min(1, Math.max(0, brightness / 255));
-    const mainRgb = mainOn ? lightColor(mainState) ?? [255, 193, 7] : undefined;
+    const mainRgb = mainOn ? lightColor(mainState) : undefined;
 
     const cardStyle: Record<string, string> = {};
     if (accent) cardStyle["--apc-accent"] = accent;
-    if (glowRgb) {
-      cardStyle["--apc-glow-rgb"] = glowRgb.join(",");
-      cardStyle["--apc-glow-alpha"] = glowStrength.toFixed(3);
-    }
+    if (glowRgb) cardStyle["--apc-glow-rgb"] = glowRgb.join(",");
+    if (glowSource) cardStyle["--apc-glow-alpha"] = glowStrength.toFixed(3);
     if (mainRgb) cardStyle["--apc-light-rgb"] = mainRgb.join(",");
     const colors = config.colors ?? {};
     if (colors.temperature_low) cardStyle["--apc-temp-low"] = cssColor(colors.temperature_low);
@@ -324,7 +323,7 @@ export class AreaPulseCard extends LitElement {
     return html`
       <ha-card class=${classMap({ alerting: alerts.length > 0 })} style=${styleMap(cardStyle)}>
         ${showPicture ? html`<div class="picture" style=${styleMap({ backgroundImage: `url("${area.picture}")` })}></div>` : nothing}
-        <div class=${classMap({ glow: true, on: !!glowRgb })}></div>
+        <div class=${classMap({ glow: true, on: !!glowSource })}></div>
         <div class="content">
           <div
             class=${classMap({ header: true, clickable: headerHasAction })}

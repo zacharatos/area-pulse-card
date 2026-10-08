@@ -2,35 +2,45 @@ import { css } from "lit";
 
 export const cardStyles = css`
   :host {
-    /* Colour tokens map onto Home Assistant's own palette so themes keep working. */
-    --apc-accent: var(--primary-color);
-    --apc-amber: var(--amber-color, #ffc107);
-    --apc-orange: var(--orange-color, #ff9800);
+    /* Every variable reads the shared Pulse token first (set by the Pulse theme), then Home Assistant's
+       own variable, then the value this card always used. Without the Pulse theme nothing changes. */
+    --apc-accent: var(--pulse-accent, var(--primary-color));
+    /* Colours with a meaning: on (lights), needs a look, problem, all good, information. */
+    --apc-amber: var(--pulse-active, var(--amber-color, #ffc107));
+    --apc-orange: var(--pulse-warn, var(--orange-color, #ff9800));
+    --apc-red: var(--pulse-bad, var(--red-color, #f44336));
+    --apc-green: var(--pulse-ok, var(--green-color, #4caf50));
+    --apc-blue: var(--pulse-info, var(--blue-color, #2196f3));
+    /* Category colours: Home Assistant's palette (the Pulse theme mutes it). */
     --apc-deep-orange: var(--deep-orange-color, #ff6f22);
-    --apc-red: var(--red-color, #f44336);
-    --apc-green: var(--green-color, #4caf50);
-    --apc-blue: var(--blue-color, #2196f3);
     --apc-light-blue: var(--light-blue-color, #03a9f4);
     --apc-cyan: var(--cyan-color, #00bcd4);
     --apc-teal: var(--teal-color, #009688);
     --apc-indigo: var(--indigo-color, #3f51b5);
     --apc-purple: var(--purple-color, #926bc7);
-    /* Climate colouring: cold blue / warm red, dry white / humid blue. */
-    --apc-temp-low: var(--apc-blue);
-    --apc-temp-high: var(--apc-red);
-    --apc-hum-low: #8fa4ae; /* white is invisible on a light card, so light themes get a pale blue-grey */
-    --apc-hum-high: var(--apc-blue);
-    --apc-glow-rgb: 255, 193, 7;
+    /* Climate colouring: cold / warm, dry / humid. */
+    --apc-temp-low: var(--pulse-cold, var(--apc-blue));
+    --apc-temp-high: var(--pulse-warm, var(--apc-red));
+    --apc-hum-low: var(--pulse-dry, #8fa4ae); /* white is invisible on a light card, so light themes get a pale blue-grey */
+    --apc-hum-high: var(--pulse-humid, var(--apc-blue));
+    /* Glow and the main light's icon when the light has no colour of its own; the card sets both inline
+       when it does. --apc-glow-scale lets the theme soften every glow (Pulse's glow-alpha vs. our 0.16). */
+    --apc-glow-rgb: var(--rgb-pulse-active, 255, 193, 7);
+    --apc-light-rgb: var(--rgb-pulse-active, 255, 193, 7);
     --apc-glow-alpha: 0.16;
-    --apc-neutral-bg: color-mix(in srgb, var(--primary-text-color) 6%, transparent);
-    --apc-neutral-bg-hover: color-mix(in srgb, var(--primary-text-color) 10%, transparent);
-    --apc-radius: var(--ha-card-border-radius, 12px);
-    --apc-control-radius: var(--ha-card-features-border-radius, var(--feature-border-radius, 12px));
+    --apc-glow-scale: calc(var(--pulse-glow-alpha, 0.16) / 0.16);
+    --apc-neutral-bg: var(--pulse-surface-neutral, color-mix(in srgb, var(--primary-text-color) 6%, transparent));
+    --apc-neutral-bg-hover: var(--pulse-surface-neutral-hover, color-mix(in srgb, var(--primary-text-color) 10%, transparent));
+    --apc-radius: var(--pulse-radius, var(--ha-card-border-radius, 12px));
+    --apc-control-radius: var(--pulse-control-radius, var(--ha-card-features-border-radius, var(--feature-border-radius, 12px)));
+    --apc-chip-height: var(--pulse-chip-height, 30px);
+    --apc-gap: var(--pulse-gap, 12px);
+    --apc-pad: var(--pulse-pad, 12px);
     display: block;
     height: 100%;
   }
   :host([dark]) {
-    --apc-hum-low: #ffffff;
+    --apc-hum-low: var(--pulse-dry, #ffffff);
   }
 
   ha-card {
@@ -66,7 +76,7 @@ export const cardStyles = css`
     transition: opacity 600ms ease;
     background: radial-gradient(
       140% 100% at 0% 0%,
-      rgba(var(--apc-glow-rgb), var(--apc-glow-alpha)) 0%,
+      rgba(var(--apc-glow-rgb), calc(var(--apc-glow-alpha) * var(--apc-glow-scale))) 0%,
       transparent 58%
     );
   }
@@ -78,8 +88,8 @@ export const cardStyles = css`
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 12px;
+    gap: var(--apc-gap);
+    padding: var(--apc-pad);
   }
 
   /* Header */
@@ -264,9 +274,9 @@ export const cardStyles = css`
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 30px;
+    height: var(--apc-chip-height);
     padding: 0 12px 0 9px;
-    border-radius: 15px;
+    border-radius: calc(var(--apc-chip-height) / 2);
     border: none;
     font: inherit;
     font-size: 12px;
