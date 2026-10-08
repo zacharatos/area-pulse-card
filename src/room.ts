@@ -88,6 +88,12 @@ const SKIPPED_DOMAINS = new Set([
 ]);
 
 const UNAVAILABLE = "unavailable";
+
+/**
+ * Domains whose "unavailable" is normal, not a fault: many media players (TVs, casts, speakers) drop off
+ * the network when they're switched off. They stay in their own section instead of "Needs attention".
+ */
+const UNAVAILABLE_IS_NORMAL = new Set(["media_player"]);
 const domainOf = (id: string) => id.split(".")[0];
 const deviceClass = (s?: HassEntity) => s?.attributes.device_class as string | undefined;
 
@@ -216,7 +222,7 @@ export function buildRoom(hass: HomeAssistant, config: AreaPulseCardConfig, inde
     if (!s || attention[id]) continue;
     const domain = domainOf(id);
     if (SKIPPED_DOMAINS.has(domain)) continue;
-    if (s.state === UNAVAILABLE) {
+    if (s.state === UNAVAILABLE && !UNAVAILABLE_IS_NORMAL.has(domain)) {
       unavailable.push(id);
       attention[id] = "unavailable";
       continue;
@@ -244,6 +250,63 @@ export function buildRoom(hass: HomeAssistant, config: AreaPulseCardConfig, inde
     out.push(sec);
   }
   return { sections: out, total: out.reduce((n, s) => n + s.entities.length, 0) };
+}
+
+// ---- Native tiles ---------------------------------------------------------
+
+/** Things you run rather than switch: their state is "when it last ran", never on or off. */
+export const RUNNABLE_SERVICE: Record<string, string> = {
+  scene: "scene.turn_on",
+  script: "script.turn_on",
+  button: "button.press",
+  input_button: "input_button.press",
+};
+
+/**
+ * Native tile config for a control in the popups, with the feature that makes sense for the domain.
+ * It depends on the state, so the card re-applies it when the state changes:
+ *  - A light shows its brightness slider only while it's on. HA's tile has no option to hide the feature
+ *    when off, and an empty slider on every light that's off reads as noise. Tap the icon to turn it on.
+ *  - A scene, script or button is something you run: tapping the tile runs it (HA's own tile opens
+ *    more-info), hold opens more-info. Its state line is when it last ran, or nothing if it never ran,
+ *    instead of "Unknown".
+ */
+export function tileConfig(entity: string, s: HassEntity | undefined, name: string): Record<string, unknown> {
+  const domain = domainOf(entity);
+  const base = { type: "tile", entity, name };
+
+  const service = RUNNABLE_SERVICE[domain];
+  if (service) {
+    const run = { action: "perform-action", perform_action: service, target: { entity_id: entity } };
+    let stateLine: Record<string, unknown> = {};
+    if (domain === "script") {
+      // A script's state is on (running) or off; when it last ran is an attribute.
+      if (s?.state === "off") stateLine = s.attributes.last_triggered ? { state_content: "last_triggered" } : { hide_state: true };
+    } else if (s?.state === "unknown") {
+      stateLine = { hide_state: true };
+    }
+    return { ...base, ...stateLine, tap_action: run, icon_tap_action: run, hold_action: { action: "more-info" } };
+  }
+
+  const features: Record<string, unknown>[] = [];
+  if (domain === "light") {
+    const modes = (s?.attributes.supported_color_modes as string[] | undefined) ?? [];
+    if (s?.state === "on" && modes.some((m) => m !== "onoff")) features.push({ type: "light-brightness" });
+  } else if (domain === "cover") {
+    features.push({ type: "cover-open-close" });
+  } else if (domain === "climate") {
+    features.push({ type: "target-temperature" });
+  } else if (domain === "media_player") {
+    features.push({ type: "media-player-playback" });
+  }
+  return {
+    ...base,
+    // Inline keeps a light one row tall (slider beside the name) on Home Assistant versions that support
+    // it; older ones ignore the key and draw the slider below.
+    ...(features.length
+      ? { features, features_position: domain === "light" || domain === "climate" ? "inline" : "bottom" }
+      : {}),
+  };
 }
 
 // ---- Names ----------------------------------------------------------------

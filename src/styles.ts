@@ -239,6 +239,18 @@ export const cardStyles = css`
   }
   .hum.low { color: var(--apc-hum-low); }
   .hum.high { color: var(--apc-hum-high); }
+  /* Humidity and the sensor_classes readings: one small line under the temperature that wraps. */
+  .readings {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    column-gap: 8px;
+    row-gap: 0;
+    max-width: 150px;
+  }
+  .hum { white-space: nowrap; }
+  .reading.warn { color: var(--apc-orange); }
+  .reading.bad { color: var(--apc-red); }
 
   /* Alert banner */
   .alert-banner {
@@ -311,10 +323,6 @@ export const cardStyles = css`
   }
   .chip.active:hover { background: color-mix(in srgb, var(--c) 24%, transparent); }
   .chip.selected { box-shadow: inset 0 0 0 1.5px var(--c); }
-  .chip.stat { cursor: pointer; color: var(--primary-text-color); }
-  .chip.stat ha-icon { color: var(--secondary-text-color); }
-  .chip.stat.warn ha-icon, .chip.stat.warn { color: var(--apc-orange); }
-  .chip.stat.bad ha-icon, .chip.stat.bad { color: var(--apc-red); }
   /* chip_colors: state (default). Neutral fill and text; only the icon carries the meaning (--c). */
   .chip.calm.active {
     color: var(--primary-text-color);
@@ -322,7 +330,6 @@ export const cardStyles = css`
   }
   .chip.calm.active:hover { background: var(--apc-neutral-bg-hover); }
   .chip.calm.active ha-icon { color: var(--c); }
-  .chip.stat.calm.warn, .chip.stat.calm.bad { color: var(--primary-text-color); }
   /* "+N": the chips that didn't fit on the face; opens the room popup. */
   .chip.more { padding: 0 11px; font-variant-numeric: tabular-nums; }
   .chip .label {
@@ -361,7 +368,8 @@ export const cardStyles = css`
       transform var(--apc-motion-fast) var(--apc-ease);
     --mdc-icon-size: 20px;
   }
-  .action ha-icon { color: var(--c); flex: none; }
+  /* --apc-action-icon: neutral when idle with chip_colors: state (actionIconColor). */
+  .action ha-icon { color: var(--apc-action-icon, var(--c)); flex: none; }
   .action:hover { background: var(--apc-neutral-bg-hover); }
   .action:active { transform: scale(0.96); }
   .action:focus-visible { outline: 2px solid var(--c); outline-offset: 1px; }

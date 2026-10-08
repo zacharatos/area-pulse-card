@@ -231,6 +231,15 @@ function escapeRe(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Icon colour of a quick action, following the tile rule with `chip_colors: state` (calm): an active action
+ * (lights on, media playing, vacuum cleaning) colours its icon, an idle or stateless one (lights_on,
+ * lights_off, everything_off, a scene) uses the secondary text colour. `category` keeps the colour always.
+ */
+export function actionIconColor(a: Pick<ResolvedAction, "active" | "color">, calm: boolean): string {
+  return !calm || a.active ? a.color : "var(--secondary-text-color)";
+}
+
 /** Accept HA colour tokens ("amber", "light-blue") or any CSS colour. */
 export function cssColor(color: string): string {
   if (/^(#|rgb|hsl|var\()/i.test(color)) return color;

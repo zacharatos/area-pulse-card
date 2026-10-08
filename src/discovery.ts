@@ -271,33 +271,46 @@ export function chipTone(id: GroupId): ChipTone {
   }
 }
 
-/** A chip the card could show: a status group, or a passive reading (`group` unset). */
+/** A status chip the card could show. */
 export interface ChipCandidate {
-  group?: GroupId;
+  group: GroupId;
   active: boolean;
-  /** Readings only: out of range. */
-  severity?: "" | "warn" | "bad";
 }
 
 /**
- * Split chips into the ones on the card face and the ones behind "+N". Active chips come before
- * inactive ones, each in `CHIP_PRIORITY` order; an out-of-range reading ranks with the openings and
- * a normal reading closes the active set. `max <= 0` shows everything in the given order.
+ * Out-of-range level of a `sensor_classes` reading, shown in the climate block: CO₂ from 1000 ppm (warn) and
+ * 1500 ppm (bad), PM2.5 from 12 and 35 µg/m³. Readings without an agreed range are never coloured.
+ */
+export function readingSeverity(r: Pick<Reading, "deviceClass" | "value">): "" | "warn" | "bad" {
+  if (r.deviceClass === "carbon_dioxide") return r.value >= 1500 ? "bad" : r.value >= 1000 ? "warn" : "";
+  if (r.deviceClass === "pm25") return r.value >= 35 ? "bad" : r.value >= 12 ? "warn" : "";
+  return "";
+}
+
+/**
+ * Split chips into the ones on the card face and the ones behind "+N". `max <= 0` shows everything in the
+ * given order (the way back to the old look). With a cap:
+ *  - Active chips fill the slots in `CHIP_PRIORITY` order.
+ *  - Inactive chips ("Doors closed") never take a slot an active chip wants and never count towards "+N";
+ *    they only fill slots that are left free (the card passes them only with `show_inactive`).
+ *  - Exactly one chip too many shows it instead of a "+1" chip, which would take the same space.
+ * Nothing active and nothing to fill means an empty face: the card then draws no chip row.
  */
 export function pickChips<T extends ChipCandidate>(items: T[], max: number): { shown: T[]; hidden: T[] } {
   if (max <= 0) return { shown: items, hidden: [] };
-  const windows = CHIP_PRIORITY.indexOf("windows");
   const rank = (c: T): number => {
-    if (!c.group) return c.severity ? windows + 0.5 : CHIP_PRIORITY.length;
-    const tier = c.active ? 0 : 100;
     const i = CHIP_PRIORITY.indexOf(c.group);
-    return tier + (i < 0 ? CHIP_PRIORITY.length : i);
+    return i < 0 ? CHIP_PRIORITY.length : i;
   };
-  const sorted = items
-    .map((c, i) => ({ c, i, r: rank(c) }))
-    .sort((a, b) => a.r - b.r || a.i - b.i)
-    .map((x) => x.c);
-  return { shown: sorted.slice(0, max), hidden: sorted.slice(max) };
+  const sort = (list: T[]) =>
+    list
+      .map((c, i) => ({ c, i, r: rank(c) }))
+      .sort((a, b) => a.r - b.r || a.i - b.i)
+      .map((x) => x.c);
+  const active = sort(items.filter((c) => c.active));
+  const inactive = sort(items.filter((c) => !c.active));
+  if (active.length > max + 1) return { shown: active.slice(0, max), hidden: active.slice(max) };
+  return { shown: [...active, ...inactive.slice(0, Math.max(0, max - active.length))], hidden: [] };
 }
 
 /** Every entity whose state change can alter the card. Used to skip needless re-renders. */

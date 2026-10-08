@@ -24,6 +24,7 @@ import {
   indexArea,
   lightColor,
   pickChips,
+  readingSeverity,
   reading,
   watchedEntities,
   type AreaIndex,
@@ -32,12 +33,14 @@ import {
   type Reading,
 } from "./discovery";
 import { hasLabelFilter, loadLabelRegistry, resolveLabelFilter, type ResolvedLabelFilter } from "./labels";
-import { cssColor, resolveAction, type ResolvedAction } from "./presets";
+import { actionIconColor, cssColor, resolveAction, type ResolvedAction } from "./presets";
 import {
   buildRoom,
   isActiveState,
   matchesQuery,
   roomLabels,
+  RUNNABLE_SERVICE,
+  tileConfig,
   type RoomLabel,
   type RoomModel,
   type RoomSection,
@@ -220,8 +223,8 @@ export class AreaPulseCard extends LitElement {
     // Popup tiles are real cards: keep them live even when nothing on this card changed.
     if (changed.has("hass") && this.hass) {
       const hass = this.hass;
-      for (const t of this._tiles ?? []) (t as unknown as { hass: HomeAssistant }).hass = hass;
-      for (const t of this._roomTiles?.values() ?? []) (t as unknown as { hass: HomeAssistant }).hass = hass;
+      for (const t of this._tiles ?? []) this._syncTile(t, hass);
+      for (const t of this._roomTiles?.values() ?? []) this._syncTile(t, hass);
     }
     if (!changed.has("hass") || changed.size > 1) return true;
     const old = changed.get("hass") as HomeAssistant | undefined;
@@ -340,7 +343,7 @@ export class AreaPulseCard extends LitElement {
       linked: !!mainLight,
       "light-on": mainOn,
     };
-    const chips = this._chipModel(groups, extras, roomEnabled);
+    const chips = this._chipModel(groups, roomEnabled);
     const onFace = new Set(chips.shown.map((c) => c.group).filter((g): g is GroupId => !!g));
     const icon = html`<ha-icon .icon=${config.icon || area.icon || DEFAULT_ICON}></ha-icon>`;
     const dot = occupied ? html`<span class="presence-dot"></span>` : nothing;
@@ -383,7 +386,7 @@ export class AreaPulseCard extends LitElement {
               <div class="name">${config.name || area.name}</div>
               <div class="secondary">${this._secondary(groups, onFace)}</div>
             </div>
-            ${this._renderClimate(temperature, humidity)}
+            ${this._renderClimate(temperature, humidity, extras)}
           </div>
           ${this._renderLabelHint(index)}
           ${alerts.length ? keyed(alerts.join(), this._renderAlertBanner(alerts)) : nothing}
@@ -439,8 +442,12 @@ export class AreaPulseCard extends LitElement {
     return parts.map((p, i) => html`${i ? html`<span class="dot">·</span>` : nothing}${p}`);
   }
 
-  private _renderClimate(temp?: Reading, hum?: Reading) {
-    if (!temp && !hum) return nothing;
+  /**
+   * The right-hand block: temperature large, then humidity and the `sensor_classes` readings as a small
+   * line that wraps. A value is coloured only when it is out of range.
+   */
+  private _renderClimate(temp?: Reading, hum?: Reading, extras: Reading[] = []) {
+    if (!temp && !hum && !extras.length) return nothing;
     const config = this._config!;
     const tempUnit = temp?.unit || "°";
     const tState = temp
@@ -458,9 +465,23 @@ export class AreaPulseCard extends LitElement {
               ${this._num(temp.value, 1)}<span class="unit">${tempUnit}</span>
             </div>`
           : nothing}
-        ${hum
-          ? html`<div class="hum ${hState}" @click=${(e: Event) => this._moreInfo(hum.entities[0], e)}>
-              <ha-icon .icon=${hState === "low" ? "mdi:water-percent-alert" : "mdi:water-percent"}></ha-icon>${this._num(hum.value, 0)}${hum.unit}
+        ${hum || extras.length
+          ? html`<div class="readings">
+              ${hum
+                ? html`<div class="hum ${hState}" @click=${(e: Event) => this._moreInfo(hum.entities[0], e)}>
+                    <ha-icon .icon=${hState === "low" ? "mdi:water-percent-alert" : "mdi:water-percent"}></ha-icon>${this._num(hum.value, 0)}${hum.unit}
+                  </div>`
+                : nothing}
+              ${extras.map((r) => {
+                const severity = readingSeverity(r);
+                return html`<div
+                  class="hum reading ${severity}"
+                  title=${this._entityName(this.hass!.states[r.entities[0]])}
+                  @click=${(e: Event) => this._moreInfo(r.entities[0], e)}
+                >
+                  <ha-icon .icon=${SENSOR_ICONS[r.deviceClass] ?? "mdi:gauge"}></ha-icon>${this._num(r.value, Math.abs(r.value) >= 100 ? 0 : 1)}${r.unit ? ` ${r.unit}` : ""}
+                </div>`;
+              })}
             </div>`
           : nothing}
       </div>
@@ -493,7 +514,7 @@ export class AreaPulseCard extends LitElement {
    * important ones in one row and a "+N" chip opens the room popup; without the room popup, or with
    * `max_chips: 0`, every chip shows in the configured order and rows (`top_groups`).
    */
-  private _chipModel(groups: Partial<Record<GroupId, Group>>, extras: Reading[], roomEnabled: boolean) {
+  private _chipModel(groups: Partial<Record<GroupId, Group>>, roomEnabled: boolean) {
     const config = this._config!;
     const order = (config.groups ?? DEFAULT_GROUPS).filter((g) => g !== "presence");
     const top = new Set(config.top_groups ?? DEFAULT_TOP_GROUPS);
@@ -508,11 +529,6 @@ export class AreaPulseCard extends LitElement {
       if (id === "batteries" && !group.active.length) continue;
       if (!group.active.length && !showInactive) continue;
       items.push({ group: id, active: group.active.length > 0, top: top.has(id), render: () => this._groupChip(group) });
-    }
-    // Passive readings close the second row.
-    for (const r of extras) {
-      const severity = this._statSeverity(r);
-      items.push({ active: true, severity, top: false, render: () => this._statChip(r, severity) });
     }
 
     const max = roomEnabled ? config.max_chips ?? DEFAULT_MAX_CHIPS : 0;
@@ -550,25 +566,6 @@ export class AreaPulseCard extends LitElement {
         ${row1.length ? html`<div class="chips">${row1}</div>` : nothing}
         ${row2.length ? html`<div class="chips">${row2}</div>` : nothing}
       </div>
-    `;
-  }
-
-  private _statSeverity(r: Reading): "" | "warn" | "bad" {
-    if (r.deviceClass === "carbon_dioxide") return r.value >= 1500 ? "bad" : r.value >= 1000 ? "warn" : "";
-    if (r.deviceClass === "pm25") return r.value >= 35 ? "bad" : r.value >= 12 ? "warn" : "";
-    return "";
-  }
-
-  private _statChip(r: Reading, severity: "" | "warn" | "bad") {
-    const digits = Math.abs(r.value) >= 100 ? 0 : 1;
-    return html`
-      <button
-        class=${classMap({ chip: true, stat: true, [severity]: !!severity, calm: this._calmChips })}
-        @click=${() => this._moreInfo(r.entities[0])}
-      >
-        <ha-icon .icon=${SENSOR_ICONS[r.deviceClass] ?? "mdi:gauge"}></ha-icon>
-        <span class="label">${this._num(r.value, digits)} ${r.unit}</span>
-      </button>
     `;
   }
 
@@ -669,7 +666,7 @@ export class AreaPulseCard extends LitElement {
           (a) => html`
             <button
               class=${classMap({ action: true, active: a.active })}
-              style=${styleMap({ "--c": a.color })}
+              style=${styleMap({ "--c": a.color, "--apc-action-icon": actionIconColor(a, this._calmChips) })}
               title=${a.name}
               aria-label=${a.name}
               ?disabled=${a.disabled}
@@ -787,41 +784,46 @@ export class AreaPulseCard extends LitElement {
       this._tiles = null;
       return;
     }
-    const tiles = await Promise.all(
-      this._sortedEntities(group).map(async (entity) => {
-        const el = await helpers.createCardElement(this._tileConfig(entity));
-        (el as unknown as { hass?: HomeAssistant }).hass = this.hass;
-        return el;
-      })
-    );
+    const tiles = await Promise.all(this._sortedEntities(group).map((entity) => this._createTile(helpers, entity)));
     if (this._popup === id) this._tiles = tiles;
   }
 
-  /** Native tile card config, with the control feature that makes sense for the domain. */
-  private _tileConfig(entity: string, name?: string): Record<string, unknown> {
+  /** What each native popup tile was built from, so it can be re-configured when its state changes. */
+  private _tileSources = new WeakMap<HTMLElement, { entity: string; name: string; state?: HassEntity; key: string }>();
+
+  /** A native tile for the popups (config from `tileConfig`), remembered for `_syncTile`. */
+  private async _createTile(helpers: CardHelpers, entity: string, name?: string): Promise<HTMLElement> {
     const s = this.hass!.states[entity];
-    const domain = entity.split(".")[0];
-    const features: Record<string, unknown>[] = [];
-    if (domain === "light") {
-      const modes = (s?.attributes.supported_color_modes as string[] | undefined) ?? [];
-      if (modes.some((m) => m !== "onoff")) features.push({ type: "light-brightness" });
-    } else if (domain === "cover") {
-      features.push({ type: "cover-open-close" });
-    } else if (domain === "climate") {
-      features.push({ type: "target-temperature" });
-    } else if (domain === "media_player") {
-      features.push({ type: "media-player-playback" });
+    const label = name ?? this._entityName(s);
+    const config = tileConfig(entity, s, label);
+    const el = await helpers.createCardElement(config);
+    this._tileSources.set(el, { entity, name: label, state: s, key: JSON.stringify(config) });
+    (el as unknown as { hass?: HomeAssistant }).hass = this.hass;
+    return el;
+  }
+
+  /**
+   * Keep a tile's config in step with its state: a light that turns on gets its brightness slider, a scene
+   * that has just run gets its "last run" line. Only re-applied when the config really changes.
+   */
+  private _syncTile(el: HTMLElement, hass: HomeAssistant) {
+    const src = this._tileSources.get(el);
+    const s = hass.states[src?.entity ?? ""];
+    if (src && s !== src.state) {
+      src.state = s;
+      const config = tileConfig(src.entity, s, src.name);
+      const key = JSON.stringify(config);
+      const tile = el as unknown as { setConfig?: (c: Record<string, unknown>) => void };
+      if (key !== src.key && tile.setConfig) {
+        src.key = key;
+        try {
+          tile.setConfig(config);
+        } catch {
+          // Keep the tile as it was; HA shows its own error card for a config it rejects.
+        }
+      }
     }
-    return {
-      type: "tile",
-      entity,
-      name: name ?? this._entityName(s),
-      // Inline keeps a light one row tall (slider beside the name) on Home Assistant versions that support
-      // it; older ones ignore the key and draw the slider below.
-      ...(features.length
-        ? { features, features_position: domain === "light" || domain === "climate" ? "inline" : "bottom" }
-        : {}),
-    };
+    (el as unknown as { hass: HomeAssistant }).hass = hass;
   }
 
   private _closePopup() {
@@ -939,7 +941,7 @@ export class AreaPulseCard extends LitElement {
           ${this._bulkActions(group).length
             ? html`<div class="popup-bulk">
                 ${this._bulkActions(group).map(
-                  (b) => html`<button class="bulk" @click=${() => this._bulk(group, b.service)}>
+                  (b) => html`<button class=${classMap({ bulk: true, calm: this._calmChips })} @click=${() => this._bulk(group, b.service)}>
                     <ha-icon .icon=${b.icon}></ha-icon>${b.label}
                   </button>`
                 )}
@@ -969,11 +971,12 @@ export class AreaPulseCard extends LitElement {
     const rgb = id.startsWith("light.") ? lightColor(s) : undefined;
     const color = rgb ? `rgb(${rgb.join(",")})` : opts.color;
     const t = Date.parse(s.last_changed);
-    const toggleable = ["light", "switch", "fan", "input_boolean", "cover", "media_player", "lock"].includes(
-      id.split(".")[0]
-    );
-    const stateLine =
-      opts.sub ?? `${this._formatState(s)}${Number.isNaN(t) ? "" : ` · ${this._ago(t)}`}`;
+    const domain = id.split(".")[0];
+    const toggleable = ["light", "switch", "fan", "input_boolean", "cover", "media_player", "lock"].includes(domain);
+    // Same rules as the native tile (`tileConfig`): a scene, script or button runs on tap and shows when it
+    // last ran, or nothing.
+    const run = RUNNABLE_SERVICE[domain];
+    const stateLine = opts.sub ?? (run ? this._lastRun(s) : `${this._formatState(s)}${Number.isNaN(t) ? "" : ` · ${this._ago(t)}`}`);
     return html`
       <div
         class=${classMap({ "mini-tile": true, active: opts.active })}
@@ -982,7 +985,12 @@ export class AreaPulseCard extends LitElement {
         tabindex="0"
         ${actionHandler({ hasHold: true })}
         @apc-action=${(ev: CustomEvent) => {
-          if (ev.detail.action === "hold" || !toggleable) this._moreInfo(id);
+          if (ev.detail.action === "hold" || (!toggleable && !run)) this._moreInfo(id);
+          else if (run)
+            this._fireAction(
+              { tap_action: { action: "perform-action", perform_action: run, target: { entity_id: id } } },
+              "tap"
+            );
           else this._fireAction({ entity: id, tap_action: { action: "toggle" } }, "tap");
         }}
       >
@@ -993,6 +1001,14 @@ export class AreaPulseCard extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  /** "Last run: 5 min" for a scene, script or button; empty when it never ran (instead of "Unknown"). */
+  private _lastRun(s: HassEntity): string {
+    if (s.state === "unavailable") return this._formatState(s);
+    const when = s.entity_id.startsWith("script.") ? (s.attributes.last_triggered as string | undefined) : s.state;
+    const t = when ? Date.parse(when) : NaN;
+    return Number.isNaN(t) ? "" : localize(this.hass, "last_run", { ago: this._ago(t) });
   }
 
   // ---- Room popup ---------------------------------------------------------
@@ -1057,11 +1073,7 @@ export class AreaPulseCard extends LitElement {
     }
     if (!need.length) return;
     const created = await Promise.all(
-      need.map(async (id) => {
-        const el = await helpers.createCardElement(this._tileConfig(id, this._roomName(id)));
-        (el as unknown as { hass?: HomeAssistant }).hass = this.hass;
-        return [id, el] as const;
-      })
+      need.map(async (id) => [id, await this._createTile(helpers, id, this._roomName(id))] as const)
     );
     if (this._roomTiles !== tiles) return; // closed or reopened meanwhile
     for (const [id, el] of created) if (!tiles.has(id)) tiles.set(id, el);
@@ -1240,7 +1252,10 @@ export class AreaPulseCard extends LitElement {
             <ha-icon class="sec-chevron" .icon=${collapsed ? "mdi:chevron-down" : "mdi:chevron-up"}></ha-icon>
           </button>
           ${bulk.map(
-            (b) => html`<button class="bulk small" @click=${() => this._bulk(group!, b.service)}>
+            (b) => html`<button
+              class=${classMap({ bulk: true, small: true, calm: this._calmChips })}
+              @click=${() => this._bulk(group!, b.service)}
+            >
               <ha-icon .icon=${b.icon}></ha-icon>${b.label}
             </button>`
           )}

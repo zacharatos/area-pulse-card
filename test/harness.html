@@ -146,6 +146,11 @@
   add(st("sensor.den_humidity", "31.8", { friendly_name: "Sonoff Temperature(Den) Humidity", device_class: "humidity", unit_of_measurement: "%" }), D, { device_id: "dev_sonoff" });
   add(st("sensor.den_lux_moes", "133", { friendly_name: "Moes Presence(Den) Illuminance", device_class: "illuminance", unit_of_measurement: "lx" }), D, { device_id: "dev_moes" });
   add(st("sensor.den_lux_aqara", "8", { friendly_name: "Aqara Motion(Den) Illuminance", device_class: "illuminance", unit_of_measurement: "lx" }), D, { device_id: "dev_aqara" });
+  // Things you run, and a media player that drops off the network when it's switched off.
+  add(st("scene.den_focus", "unknown", { friendly_name: "Den Focus" }), D);
+  add(st("scene.den_evening", ago(95), { friendly_name: "Den Evening" }, 95), D);
+  add(st("script.den_wind_down", "off", { friendly_name: "Wind Down", last_triggered: ago(1500) }), D);
+  add(st("media_player.den_tv_box", "unavailable", { friendly_name: "Den TV Box" }, 300), D);
   add(st("sensor.den_pm25", "9", { friendly_name: "Xiaomi Air Purifier Environment PM2.5", device_class: "pm25", unit_of_measurement: "µg/m³" }), D);
   for (let i = 0; i < 24; i++) add(st(`sensor.den_node_${i}`, String(i * 3), { friendly_name: `Den Node ${i} Power`, device_class: "power", unit_of_measurement: "W" }), D, { labels: i < 3 ? ["on_card"] : [] });
 
@@ -178,9 +183,19 @@
   if (new URLSearchParams(location.search).get("helpers")) {
     customElements.define("stub-tile", class extends HTMLElement {
       set hass(h) { this._h = h; this.draw(); }
-      draw() { if (!this._h || !this.config) return; const s = this._h.states[this.config.entity];
-        this.style.cssText = "display:block;padding:10px 12px;border-radius:12px;border:1px dashed var(--divider-color);font:13px system-ui";
-        this.textContent = `TILE ${this.config.name} — ${s.state}${this.config.features ? " + " + this.config.features.map(f => f.type).join(",") : ""}`; }
+      // A rough stand-in for HA's tile: name, state line (honours hide_state / state_content), a slider for
+      // light-brightness, other features by name, and the tap action.
+      draw() { if (!this._h || !this.config) return; const c = this.config, s = this._h.states[c.entity];
+        const rel = (v) => { const t = Date.parse(v); if (!/\d{4}-\d\d-\d\dT/.test(String(v)) || Number.isNaN(t)) return v; const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${m} minutes ago` : `${Math.round(m / 60)} hours ago`; };
+        const line = c.hide_state ? "" : rel(c.state_content ? s.attributes[c.state_content] : s.state);
+        const pct = Math.round(((s.attributes.brightness ?? 0) * 100) / 255);
+        const feats = (c.features ?? []).map((f) => f.type === "light-brightness"
+          ? `<div style="flex:0 0 96px;height:28px;border-radius:10px;background:color-mix(in srgb,var(--primary-text-color) 10%,transparent);overflow:hidden"><div style="height:100%;width:${pct}%;background:color-mix(in srgb,var(--pulse-active,#ffc107) 55%,transparent)"></div></div>`
+          : `<span style="font-size:11px;opacity:.6">${f.type}</span>`).join("");
+        const tap = c.tap_action ? `<span style="font-size:11px;opacity:.6">tap: ${c.tap_action.perform_action || c.tap_action.action}</span>` : "";
+        this.style.cssText = "display:flex;align-items:center;gap:10px;min-height:44px;padding:8px 12px;border-radius:12px;border:1px dashed var(--divider-color);font:13px system-ui;box-sizing:border-box";
+        this.innerHTML = `<div style="flex:1;min-width:0"><div style="font-weight:500">${c.name}</div>${line ? `<div style="font-size:12px;opacity:.7">${line}</div>` : ""}</div>${tap}${feats}`; }
+      setConfig(c) { this.config = c; this.draw(); }
     });
     window.loadCardHelpers = async () => ({ createCardElement: (c) => { window.tileConfigs.push(c); const el = document.createElement("stub-tile"); el.config = c; return el; } });
   }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { buildGroups, indexArea } from "../src/discovery.ts";
 import { resolveLabelFilter } from "../src/labels.ts";
-import { resolveAction } from "../src/presets.ts";
+import { actionIconColor, resolveAction } from "../src/presets.ts";
 
 const state = (entity_id, s = "off", attributes = {}) => ({
   entity_id,
@@ -53,4 +53,18 @@ test("with a label filter, presets only touch the entities the card shows", () =
   assert.equal(all.perform_action, "homeassistant.turn_off");
   assert.deepEqual([...all.target.entity_id].sort(), ["light.ceiling", "switch.heater"]);
   assert.ok(all.confirmation, "everything_off still asks for confirmation");
+});
+
+test("quick-action icons follow the tile rule: colour only while something is on", () => {
+  const neutral = "var(--secondary-text-color)";
+  // Lights are on in the fixture, so the toggle is active and keeps its gold icon.
+  assert.equal(actionIconColor(resolve("lights_toggle"), true), "var(--apc-amber)");
+  // Stateless presets never colour their icon.
+  for (const p of ["lights_on", "lights_off", "everything_off", "covers_close"])
+    assert.equal(actionIconColor(resolve(p), true), neutral, p);
+  // An idle action is neutral; chip_colors: category keeps today's coloured icons.
+  const idle = { active: false, color: "var(--apc-teal)" };
+  assert.equal(actionIconColor(idle, true), neutral);
+  assert.equal(actionIconColor(idle, false), "var(--apc-teal)");
+  assert.equal(actionIconColor(resolve("everything_off"), false), "var(--apc-red)");
 });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { indexArea } from "../src/discovery.ts";
 import { resolveLabelFilter } from "../src/labels.ts";
-import { buildRoom, matchesQuery, roomLabels } from "../src/room.ts";
+import { buildRoom, matchesQuery, roomLabels, tileConfig } from "../src/room.ts";
 
 const state = (entity_id, s = "off", attributes = {}) => ({
   entity_id,
@@ -75,6 +75,17 @@ test("attention holds tripped alerts, low batteries and unavailable entities, an
   assert.ok(!seen.includes("sensor.motion_battery"), "healthy batteries are not listed");
 });
 
+test("an unavailable media player is not a problem: it stays in Media, other domains still need attention", () => {
+  const hass = makeHass();
+  hass.states["media_player.tv_off"] = state("media_player.tv_off", "unavailable", { friendly_name: "Lounge TV Box" });
+  hass.entities["media_player.tv_off"] = { entity_id: "media_player.tv_off", area_id: "lounge" };
+  const room = buildRoom(hass, {}, indexArea(hass, "lounge", [], resolveLabelFilter()));
+  assert.ok(!ids(room, "attention").includes("media_player.tv_off"));
+  assert.equal(room.sections[0].reasons["media_player.tv_off"], undefined);
+  assert.deepEqual(ids(room, "media"), ["media_player.lounge", "media_player.tv_off"]);
+  assert.ok(ids(room, "attention").includes("light.dead"), "an unavailable light still needs attention");
+});
+
 test("controls show active things first, and noisy domains are skipped", () => {
   const { room } = build();
   assert.deepEqual(ids(room, "lights"), ["light.strip", "light.tv", "light.ceiling"]);
@@ -131,4 +142,31 @@ test("search matches words in any order against name and entity id", () => {
   assert.ok(matchesQuery("ceil light", "Lounge Ceiling", "light.ceiling"));
   assert.ok(matchesQuery("tv", "Lounge TV", "light.tv"));
   assert.ok(!matchesQuery("kitchen", "Lounge TV", "light.tv"));
+});
+
+test("a light's brightness slider is only there while the light is on", () => {
+  const dim = { supported_color_modes: ["brightness"] };
+  assert.deepEqual(tileConfig("light.a", state("light.a", "on", dim), "A").features, [{ type: "light-brightness" }]);
+  assert.equal(tileConfig("light.a", state("light.a", "off", dim), "A").features, undefined);
+  assert.equal(tileConfig("light.a", state("light.a", "unavailable", dim), "A").features, undefined);
+  assert.equal(tileConfig("light.b", state("light.b", "on", { supported_color_modes: ["onoff"] }), "B").features, undefined);
+  // Other controls keep their feature whatever the state.
+  assert.deepEqual(tileConfig("cover.c", state("cover.c", "closed"), "C").features, [{ type: "cover-open-close" }]);
+});
+
+test("scenes, scripts and buttons run on tap and never say Unknown", () => {
+  const never = tileConfig("scene.s", state("scene.s", "unknown"), "S");
+  assert.equal(never.hide_state, true);
+  assert.deepEqual(never.tap_action, { action: "perform-action", perform_action: "scene.turn_on", target: { entity_id: "scene.s" } });
+  assert.deepEqual(never.icon_tap_action, never.tap_action);
+  assert.deepEqual(never.hold_action, { action: "more-info" });
+  // A scene that ran keeps HA's own state line: the relative time it last ran.
+  const ran = tileConfig("scene.s", state("scene.s", "2026-10-01T20:00:00+00:00"), "S");
+  assert.equal(ran.hide_state, undefined);
+  assert.equal(ran.state_content, undefined);
+  // Scripts are on/off; when they last ran is an attribute.
+  assert.equal(tileConfig("script.x", state("script.x", "off", { last_triggered: "2026-10-01T20:00:00+00:00" }), "X").state_content, "last_triggered");
+  assert.equal(tileConfig("script.x", state("script.x", "off", { last_triggered: null }), "X").hide_state, true);
+  assert.equal(tileConfig("script.x", state("script.x", "on"), "X").hide_state, undefined, "a running script says so");
+  assert.equal(tileConfig("button.b", state("button.b", "unknown"), "B").tap_action.perform_action, "button.press");
 });

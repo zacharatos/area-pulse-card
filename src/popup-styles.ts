@@ -91,6 +91,10 @@ export const popupStyles = css`
     --mdc-icon-size: 18px;
   }
   .bulk:hover { background: color-mix(in srgb, var(--c) 24%, transparent); }
+  /* chip_colors: state: a bulk button is an action, not a state. Neutral fill and text, the icon in the accent. */
+  .bulk.calm { color: var(--primary-text-color); background: var(--apc-neutral-bg); }
+  .bulk.calm:hover { background: var(--apc-neutral-bg-hover); }
+  .bulk.calm ha-icon { color: var(--apc-accent); }
   .popup-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
