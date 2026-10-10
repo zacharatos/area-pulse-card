@@ -35,6 +35,7 @@ End with a short hand-off instead of a commit:
 2. What you ran to check it (`npm run typecheck`, `npm test`, `npm run build`, the harness) and the result.
 3. Anything he should try in a real Home Assistant by hand (see "Things only a real Home Assistant can prove" below).
 4. Any new or changed user-facing strings, for him to review (English and Greek).
+5. The tag to push and why that part was bumped (see **Versions** under Conventions).
 
 Don't write a commit message unless he asks for one. If he does, offer it as a suggestion in your reply; never use it yourself.
 
@@ -169,8 +170,8 @@ The harness cannot check these, so say in your hand-off which ones the change to
 
 ## Conventions
 
-- **Releases:** the maintainer bumps the version, commits, and pushes a `vX.Y.Z` tag; the release workflow builds `dist/area-pulse-card.js` and attaches it. You never tag or push.
-- **Version numbers** in `package.json` (and `VERSION` in `src/area-pulse-card.ts`): only change them when asked, and keep them equal.
+- **Releases:** you prepare the next version with every change (below); the maintainer commits and pushes the `vX.Y.Z` tag you named; the release workflow builds `dist/area-pulse-card.js` and attaches it. You never tag or push.
+- **Versions: every change carries its next version.** Read the latest tag on the remote (`git ls-remote --tags --refs origin | sed 's#.*refs/tags/##' | sort -V | tail -1`; if it can't be reached, the newest local tag, and say so). Bump **major** when something that worked stops working or the user has to act (a config key, preset or quick-action field removed or renamed, an option changing meaning, a higher minimum Home Assistant), **minor** for something new or a deliberate change of the default look or behaviour, **patch** for fixes, polish, translations, refactors, docs, tests and CI. The biggest change decides; when torn, take the bigger. Write it to `package.json`, the two top-level `version` fields of `package-lock.json` and `VERSION` in `src/area-pulse-card.ts`, all equal, then rebuild. If the working tree already holds an unreleased bump, keep it unless today's change needs a bigger part (then derive again from the remote tag). End the hand-off with the tag and why: **Tag:** `vX.Y.Z` (latest on the remote: `vA.B.C`). **Minor**, because … The full rule is Rule 2 in the home base `AGENTS.md`.
 - **CI** (`.github/workflows/validate.yml`): the HACS validation, then typecheck, build and "bundle is up to date". Anything that would fail there fails the maintainer's push, so run the same checks locally.
 - **No secrets, no private data**: never put real entity IDs, tokens, addresses or photos from a real home in the repo, the harness or the screenshots. Use invented names.
 - **Screenshots** in `docs/` come from the harness. Refresh them only when the look changes and the maintainer wants it.

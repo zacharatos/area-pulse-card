@@ -51,7 +51,7 @@ import { cardStyles } from "./styles";
 import { popupStyles } from "./popup-styles";
 import "./editor";
 
-const VERSION = "1.1.0";
+const VERSION = "1.3.6";
 
 interface CardHelpers {
   createCardElement: (config: Record<string, unknown>) => HTMLElement | Promise<HTMLElement>;
